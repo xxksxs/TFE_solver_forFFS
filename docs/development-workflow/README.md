@@ -17,3 +17,4 @@
 - **`after-editing.md`**：修改后的构建和运行检查。
 - **`review-checklist.md`**：审查时应检查的项目。
 - **`handoff-template.md`**：交给其他开发者或模型的模板。
+- **`git-workflow.md`**：本地 Git 仓库管理约定（提交粒度、标签策略、还原与排错）。
