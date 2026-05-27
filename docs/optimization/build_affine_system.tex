@@ -1,0 +1,520 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{xurl}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\geometry{left=2.5cm,right=2.5cm,top=2.6cm,bottom=2.6cm}
+\setlist{nosep}
+\linespread{1.15}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codekw}{RGB}{0,80,160}
+\definecolor{codecm}{RGB}{0,128,0}
+\definecolor{codestr}{RGB}{163,21,21}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecm}\itshape,
+  stringstyle=\color{codestr},
+  language=C++,
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  framesep=4pt,
+  xleftmargin=6pt,
+  xrightmargin=6pt,
+}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\jj}{\mathrm{j}}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\CC}{\mathbb{C}}
+\newcommand{\transpose}{\mathsf{T}}
+\newcommand{\herm}{\mathsf{H}}
+\newcommand{\Ne}{\bm{N}}
+\newcommand{\Ke}{\bm{K}}
+\newcommand{\Me}{\bm{M}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\texorpdfstring{\code{FEMAssembler::buildAffineSystem()} 数学模型与实现解读}{FEMAssembler::buildAffineSystem() 数学模型与实现解读}}
+\author{独立推导说明}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\code{FEMAssembler::buildAffineSystem()} 是本工程把频域有限元 curl--curl 系统拆成
+\emph{频率无关}\ 部分的入口，是 ALPS 快速扫频（\code{AlpsSweep}）以及未来任何 Krylov 矩匹配模型降阶（MOR）方法可以直接消费的标准化输入。本文从频域 Maxwell 方程和棱元 Galerkin 离散出发，独立推导该函数返回的每一项物理含义，并把推导各步骤精确对回到 \code{src/fem/FEMAssembler.cpp} 中的代码片段，给出 \code{AffineSystem} 各字段的数学定义、装配次序和约束语义。文中只引用本工程公开的 C++ 头文件签名作为接口对照，所有数学结论均独立给出推导。
+\end{abstract}
+
+\tableofcontents
+
+\section{为什么需要"仿射"系统}
+\label{sec:why-affine}
+
+频域电磁有限元在每个频点 $\omega$（角频率，$\omega=2\pi f$）处都需要装配并求解一个大型复对称稀疏线性系统
+\begin{equation}
+    \bm A(\omega)\,\bm x(\omega)=\bm b(\omega).
+    \label{eq:per-freq}
+\end{equation}
+若每个频点都从零开始走完"算单元矩阵 $\to$ 累加全局矩阵 $\to$ 因式分解 $\to$ 回代"四步，扫频成本随频点数线性增长。把 $\bm A(\omega)$ 写成
+\begin{equation}
+    \bm A(\omega)=\sum_{q} f_q(\omega)\,\bm A_q
+    \label{eq:affine-form}
+\end{equation}
+的"仿射展开"（affine decomposition）后，所有 $\bm A_q$ 都是\emph{频率无关}\ 的稀疏矩阵，
+只在 $\omega$ 上做轻量加权。这正是 Krylov 矩匹配 MOR、ALPS 自适应 Lanczos--Padé 扫频
+赖以工作的代数前提。\code{FEMAssembler::buildAffineSystem()} 就是一次性产出
+\eqref{eq:affine-form} 中所有 $\bm A_q$ 及其加权函数所需要的物理量。
+
+下文先在 §\ref{sec:weak-form} 推导 $\bm A(\omega)$ 的连续与离散形式，§\ref{sec:affine}
+给出仿射拆分公式，§\ref{sec:port-affine} 推导端口算子的秩 1 拆分。
+§\ref{sec:impl} 把这些数学量逐项映射到 C++ 实现，§\ref{sec:invariants}--\ref{sec:limits}
+讨论实现层的不变量、PEC 投影、损耗判定与目前的限制。
+
+\section{从 Maxwell 方程到 curl--curl 弱形式}
+\label{sec:weak-form}
+
+约定时间因子 $e^{\jj\omega t}$。各向同性线性介质中，频域 Maxwell 方程
+\begin{align}
+    \nabla\times\bm E&=-\jj\omega\mu\bm H,\\
+    \nabla\times\bm H&=(\sigma+\jj\omega\varepsilon)\bm E+\bm J_s
+\end{align}
+消去 $\bm H$ 得电场 curl--curl 方程
+\begin{equation}
+    \nabla\times\bigl(\mu_r^{-1}\nabla\times\bm E\bigr)
+    -k_0^{2}\,\varepsilon_c(\omega)\,\bm E
+    =-\jj\omega\mu_0\bm J_s,
+    \label{eq:curlcurl}
+\end{equation}
+其中
+\begin{equation}
+    k_0=\omega\sqrt{\mu_0\varepsilon_0},\qquad
+    \varepsilon_c(\omega)=\varepsilon_r-\jj\,\frac{\sigma}{\omega\varepsilon_0}.
+    \label{eq:eps_c}
+\end{equation}
+
+记计算域为 $\Omega$，端口面记作 $\Gamma_p\subset\partial\Omega$（$p=1,\dots,N_p$），
+PEC 面记作 $\Gamma_e$。乘以测试函数 $\bm v\in H_0(\mathrm{curl};\Omega)$（在 $\Gamma_e$ 上
+满足 $\bm n\times\bm v=0$）并对 $\Omega$ 积分，对 curl 项做分部积分，得到弱形式
+\begin{equation}
+    \int_\Omega\!\mu_r^{-1}(\nabla\times\bm v)\!\cdot\!(\nabla\times\bm E)\,\dd V
+    -k_0^{2}\!\int_\Omega\!\varepsilon_c\,\bm v\!\cdot\!\bm E\,\dd V
+    +\sum_{p}\!\int_{\Gamma_p}\!\bm v\!\cdot\!\bigl(\bm n\times\mu_r^{-1}\nabla\times\bm E\bigr)\,\dd S
+    =\text{(右端)}.
+    \label{eq:weak}
+\end{equation}
+最关键的一步是把 $\Gamma_p$ 上的边界项代换为只用切向电场表达的端口算子，
+推导见 §\ref{sec:port-affine}。
+
+\subsection{Galerkin 棱元离散}
+
+把 $\bm E$ 在棱元（Nédélec H(curl) 一阶不完备 / 二阶半完备）基 $\{\Ne_i\}_{i=1}^{N}$
+上展开
+\begin{equation}
+    \bm E\approx\sum_i x_i\,\Ne_i,
+\end{equation}
+取 $\bm v=\Ne_a$，$\bm E$ 的展开系数为 $x_b$，则弱形式 \eqref{eq:weak} 中的体积分两项
+直接给出全局矩阵
+\begin{equation}
+    A_{ab}^{\text{vol}}(\omega)
+    =\underbrace{\int_\Omega\!\mu_r^{-1}(\nabla\!\times\!\Ne_a)\!\cdot\!(\nabla\!\times\!\Ne_b)\,\dd V}_{\equiv K_{ab}}
+    -k_0^2\underbrace{\int_\Omega\!\varepsilon_c\,\Ne_a\!\cdot\!\Ne_b\,\dd V}_{\equiv \tilde M_{ab}(\omega)}.
+    \label{eq:Avol}
+\end{equation}
+注意 $K_{ab}$ 完全频率无关，而 $\tilde M_{ab}(\omega)$ 因含 $\varepsilon_c(\omega)$ 在
+$\sigma\neq0$ 时仍是频率函数。
+
+按单元 $T$ 分解，标准元素装配
+\begin{equation}
+    K_{ab}=\sum_T\frac{1}{\mu_{r,T}}\,\Ke^T_{ab},\qquad
+    \Ke^T_{ab}=\!\int_T(\nabla\!\times\!\Ne_a)\!\cdot\!(\nabla\!\times\!\Ne_b)\,\dd V,
+    \label{eq:Ke}
+\end{equation}
+\begin{equation}
+    \tilde M_{ab}(\omega)=\sum_T\varepsilon_{c,T}(\omega)\,\Me^T_{ab},\qquad
+    \Me^T_{ab}=\!\int_T\Ne_a\!\cdot\!\Ne_b\,\dd V.
+    \label{eq:Me}
+\end{equation}
+$\Ke^T,\Me^T$ 只依赖单元几何与基函数，不依赖 $\omega$，是\emph{频率无关}\ 的
+单元参考矩阵。
+
+\section{\texorpdfstring{$\bm A(\omega)$}{A(omega)} 的仿射拆分}
+\label{sec:affine}
+
+\subsection{\texorpdfstring{无损情形：单一 $\bm M$}{无损情形：单一 M}}
+
+无损情形 $\sigma\equiv0$，因此 $\varepsilon_c=\varepsilon_r$ 也与 $\omega$ 无关。
+体积部分立刻退化为
+\begin{equation}
+    \bm A^{\text{vol}}(\omega)=\bm K-k_0^{2}(\omega)\,\bm M,
+    \label{eq:Avol-lossless}
+\end{equation}
+其中
+\begin{equation}
+    \bm K=\sum_T\frac{1}{\mu_{r,T}}\,\bm K^T,\qquad
+    \bm M=\sum_T\varepsilon_{r,T}\,\bm M^T.
+    \label{eq:K-M-global}
+\end{equation}
+两者都是\emph{实}\ 对称稀疏矩阵，与 $\omega$ 完全解耦。把端口算子（§\ref{sec:port-affine}）
+合并进来后得到 lossless 全形仿射展开
+\begin{equation}
+    \boxed{\;\bm A(\omega)=\bm K-k_0^{2}\,\bm M
+    +\jj\sum_{p=1}^{N_v}\beta_p(\omega)\,\bm m_p\bm m_p^{\transpose}\;}
+    \label{eq:affine-lossless}
+\end{equation}
+其中 $N_v$ 是\emph{虚拟端口}\ 数（每个物理端口的每个传播模式各一个），
+$\bm m_p$ 是端口耦合稀疏向量，$\beta_p(\omega)=\sqrt{\max(0,k_0^2-k_{c,p}^2)}$
+是该模在频率 $\omega$ 处的传播常数。
+
+\subsection{有损情形：仿射展开破坏}
+
+若存在 $\sigma>0$，则 \eqref{eq:eps_c} 给出 $\varepsilon_c(\omega)=\varepsilon_r-\jj\sigma/(\omega\varepsilon_0)$，
+\eqref{eq:Avol} 中的质量项变为
+\begin{equation}
+    \tilde M_{ab}(\omega)
+    =\sum_T\Bigl(\varepsilon_{r,T}-\jj\,\frac{\sigma_T}{\omega\varepsilon_0}\Bigr)\Me^T_{ab}
+    =\varepsilon_r\text{-加权全局} M
+    -\frac{\jj}{\omega\varepsilon_0}\,(\sigma\text{-加权全局} M).
+\end{equation}
+这等价于把单一 $\bm M$ 拆成 \emph{两个}\ 全局参考矩阵
+\begin{equation}
+    \bm M=\sum_T\varepsilon_{r,T}\bm M^T,\qquad
+    \bm M_\sigma=\sum_T\sigma_T\bm M^T,
+\end{equation}
+仿射展开多出一项
+\begin{equation}
+    \bm A(\omega)=\bm K-k_0^{2}\bm M
+    +\frac{\jj k_0^{2}}{\omega\varepsilon_0}\bm M_\sigma
+    +\jj\sum_p\beta_p(\omega)\bm m_p\bm m_p^{\transpose}.
+\end{equation}
+当前实现\emph{尚未}\ 缓存 $\bm M_\sigma$，所以遇到 $\sigma>0$ 时 \code{AffineSystem::lossless}
+被置为 \code{false}，调用方（\code{AlpsSweep}）改走逐频点 direct path。
+具体判定见 §\ref{sec:lossless-flag}。
+
+\section{端口边界项的秩 1 仿射拆分}
+\label{sec:port-affine}
+
+\subsection{端口模的来源：默认走二维端面本征}
+\label{sec:port-mode-source}
+
+仿射拆分需要每个端口面 $\Gamma_p$ 上的"传播模式形状" $\bm e_{p,m}^{\perp}(\bm r)$
+和对应截止波数 $k_{c,p,m}^{2}$。本工程现支持三条路径产出这两个量，全部最终落到同一
+\code{PortMode} 数据契约上：
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{NPM (\code{--port-method numerical}，默认)}：把端口面 $\Gamma_p$ 上的
+三角剖分单独抽出来当作 2D 网，在其上做 H(curl) 棱元离散，
+求解二维广义本征值问题
+\begin{equation}
+    \bm K_{\text{port}}\,\bm v=k_{c}^{2}\,\bm M_{\text{port}}\,\bm v,
+    \label{eq:port-eig}
+\end{equation}
+取最低非伪本征对 $(\bm v_1,k_{c,1}^{2})$ 作为主模。模式形状由
+$\bm e^{\perp}=\sum_i v_i\,\Ne_i^{\partial}$ 给出，其中 $\Ne_i^{\partial}$ 是端口面
+切向 H(curl) 棱元基。对任何二维截面（矩形 / 脊形 / 圆形 / 偏心）都成立。
+实现：\code{PortModeSolver::solve(faceId)} → \code{computeMode} →
+\code{computeMultiMode(faceId, 1)}。
+\item \textbf{APM (\code{--port-method analytic})}：直接套矩形波导 TE10 闭式
+$\bm e_{\text{TE10}}=\sqrt{2/(ab)}\sin(\pi u/a)\,\hat v$，
+$k_c^{2}=(\pi/a)^{2}$，再 L2 投影到 FE 端口 dof。仅矩形截面可用。
+\item \textbf{TFE (\code{--port-method tfe})}：与 NPM 同一本征解
+\eqref{eq:port-eig}，但保留最低 $N$ 个非伪本征对，每个模出一个独立的虚拟端口。
+\end{enumerate}
+NPM 和 TFE 共用 \code{PortModeSolver::computeMultiMode}：单元矩阵对应面 H(curl)
+基的 curl-curl 与 mass，三角形 7 点 Wandzura 求积；本征求解走
+\code{LAPACKE\_dsygv}（无 MKL 时回落 Jacobi 迭代）；
+零本征对应离散梯度零空间，按相对阈值剔除。
+
+\subsection{从端面本征到端口算子的代数推导}
+\label{sec:port-affine-derivation}
+
+设 $\Gamma_p$ 上传播波导支持 $N_{m,p}$ 个传播或近截止模 $\bm e_{p,m}^{\perp}(\bm r)$，
+$m=1,\dots,N_{m,p}$。无论这些模是来自数值本征 \eqref{eq:port-eig} 还是闭式 TE10，
+对应传播常数都按
+\begin{equation}
+    \beta_{p,m}(\omega)=\sqrt{\max\bigl(0,k_0^{2}-k_{c,p,m}^{2}\bigr)}.
+    \label{eq:beta}
+\end{equation}
+在 $\Gamma_p$ 上把切向电场展开为
+\begin{equation}
+    \bm n\times(\bm n\times\bm E)\big|_{\Gamma_p}
+    =\sum_{m=1}^{N_{m,p}} \alpha_{p,m}\,\bm e_{p,m}^{\perp}+\bm E^{\text{inc}},
+    \label{eq:port-expansion}
+\end{equation}
+代入 \eqref{eq:weak} 中的端口边界积分后，无源端口在弱形式中贡献的部分是
+\begin{equation}
+    \int_{\Gamma_p}\bm v\cdot
+    \Bigl[\jj\sum_m\beta_{p,m}\bigl(\bm e_{p,m}^{\perp}\cdot\bm E\bigr)\bm e_{p,m}^{\perp}\Bigr]\dd S,
+    \label{eq:port-bilinear}
+\end{equation}
+等价于在矩阵中加入秩 1 算子
+\begin{equation}
+    \jj\sum_m\beta_{p,m}\,\bm m_{p,m}\bm m_{p,m}^{\transpose},\qquad
+    [\bm m_{p,m}]_a=\int_{\Gamma_p}\Ne_a\cdot\bm e_{p,m}^{\perp}\,\dd S.
+    \label{eq:m_p}
+\end{equation}
+$\bm m_{p,m}$ 在代码中称为 \code{couplingWeights}，是\emph{稀疏}\ 的——只有支撑落在
+$\Gamma_p$ 的边自由度的分量非零。$\bm m_{p,m}$ 与 $\omega$ 无关；
+$\beta_{p,m}(\omega)$ 是仿射形式中唯一的频率函数。
+NPM/TFE 路径下 $\bm m_{p,m}$ 直接由 $\bm M_{\text{port}}\bm v_m$ 给出（
+$M$-内积投影），APM 路径下 $\bm m_{p,m}$ 是闭式 $\bm e^{\perp}$ 在 H(curl) 端口 dof 上
+的 L2 投影。三者共用同一 \code{PortMode::couplingWeights} 字段。
+
+\subsection{虚拟端口列表}
+
+把 \eqref{eq:m_p} 对所有物理端口、所有解析模式平铺成一张\emph{虚拟端口}\ 列表，
+\eqref{eq:affine-lossless} 中的端口和写成
+\begin{equation}
+    \jj\sum_{v=1}^{N_v}\beta_v(\omega)\,\bm m_v\bm m_v^{\transpose},\qquad
+    N_v=\sum_p N_{m,p},
+\end{equation}
+其中索引 $v$ 与 \code{(projectPortIndex, modeIndex)} 一一对应。
+单模 NPM/APM 路径下 $N_{m,p}=1$，$N_v=N_p$ 直接退化。
+TFE 多模情况下，每个物理端口可能贡献若干虚拟端口；最多一个被标记为
+\code{isExcitationMode}，承载入射幅相，其余作纯吸收端口（在 \eqref{eq:weak} 中
+入射项 $\bm E^{\text{inc}}$ 为零）。
+
+\section{\texorpdfstring{对应到 \code{buildAffineSystem()} 的实现}{对应到 buildAffineSystem() 的实现}}
+\label{sec:impl}
+
+接口契约见 \code{include/bpfem/fem/FEMAssembler.hpp} 的 \code{AffineSystem}：
+\begin{lstlisting}
+struct AffineSystem {
+    SparseMatrix K;                                               // sum_e (1/mu_r,e) * K_e
+    SparseMatrix M;                                               // sum_e (eps_r,e) * M_e
+    std::vector<std::vector<std::pair<int,double>>> portCoupling; // m_p (per virtual port)
+    std::vector<double> portCutoffSquared;                        // k_{c,p}^2
+    std::vector<int>    portFaceIds;                              // physical face id
+    std::vector<int>    projectPortIndex;                         // index into project_.ports
+    std::vector<bool>   isExcitationMode;                         // true = incident-bearing mode
+    std::unordered_set<int> constrainedDofs;                      // PEC zero-Dirichlet mask
+    bool lossless = true;                                         // false if any sigma > 0
+};
+\end{lstlisting}
+下面分四步把数学量映射到代码（行号引自 \code{src/fem/FEMAssembler.cpp}）。
+
+\subsection{\texorpdfstring{第一步：单元参考矩阵 $\bm K^T,\bm M^T$ 缓存}{第一步：单元参考矩阵 K\^{}T, M\^{}T 缓存}}
+\label{sec:step-cache}
+
+\code{ensureElementCache()} 对每个有效四面体 $T$ 计算一次几何 + 基函数组合
+\begin{equation}
+    \bigl(\bm K^T_{ab},\bm M^T_{ab}\bigr)
+    =\biggl(\sum_q w_q V_T(\nabla\!\times\!\Ne_a)\!\cdot\!(\nabla\!\times\!\Ne_b),\;
+    \sum_q w_q V_T \Ne_a\!\cdot\!\Ne_b\biggr)
+\end{equation}
+其中 $\{(w_q,\bm\lambda_q)\}$ 是 \code{tetraQuadraturePoints()} 给出的 11 点
+四面体重心坐标求积公式。对应代码：
+\begin{lstlisting}
+for (a = 0..dof) for (b = a..dof)
+  for each quadrature point qp:
+    curlCurl += qp.weight * volume * dot(rowBasis.curl, colBasis.curl);
+    mass     += qp.weight * volume * dot(rowBasis.value, colBasis.value);
+entry.curlCurlGeo[idx] = curlCurl;        // K^T_{ab}
+entry.massGeo    [idx] = mass;            // M^T_{ab}
+entry.invMu      = 1 / mu_r,T;
+entry.epsR       = eps_r,T;
+entry.conductivity = sigma_T;             // 用于 lossless 判定
+\end{lstlisting}
+$\bm K^T,\bm M^T$ 用上三角紧致索引存储 \code{upperTriIndex(a,b,dof)}，
+保证装配后 $\bm K,\bm M$ 都是 CSR 上三角对称矩阵。
+
+\subsection{\texorpdfstring{第二步：稀疏图 + 体积装配（$\bm K,\bm M$）}{第二步：稀疏图 + 体积装配（K, M）}}
+\label{sec:step-vol}
+
+\code{buildAffineSystem()} 不调用与 \code{assemble()} 共享的稀疏图，而是单独构造
+一个\emph{只含体积耦合}\ 的稀疏图：
+\begin{lstlisting}
+const auto pattern = volumePatternFor(out.constrainedDofs);
+out.K = assembleVolumePiece(pattern, out.constrainedDofs, /*useCurlCurl=*/true);
+out.M = assembleVolumePiece(pattern, out.constrainedDofs, /*useCurlCurl=*/false);
+\end{lstlisting}
+理由：ALPS 的 $\bm K,\bm M$ 永远不会出现端口外积非零位置，剥掉端口图后稀疏图
+\emph{严格小于等于}\ 单频点装配的图，能把 PARDISO 符号分解成本压到最小。
+\code{assembleVolumePiece} 内对每个单元做
+\begin{equation}
+    \bm K\mathrel{+}=\frac{1}{\mu_{r,T}}\bm K^T,\qquad
+    \bm M\mathrel{+}=\varepsilon_{r,T}\bm M^T,
+\end{equation}
+其中 $\bm K^T,\bm M^T$ 来自第一步缓存，$\sigma_T$ 项故意\emph{不}\ 进入 $\bm M$，
+保留实矩阵性质（满足 \eqref{eq:K-M-global}）。
+
+\subsection{第三步：损耗标志}
+\label{sec:lossless-flag}
+
+\begin{lstlisting}
+out.lossless = true;
+for (const auto& entry : elementCache_) {
+    if (entry.valid && entry.conductivity > 0.0) {
+        out.lossless = false;
+        break;
+    }
+}
+\end{lstlisting}
+对应数学事实：单一实对称 $\bm M$ 不再能表达 $\varepsilon_c(\omega)$ 在 $\sigma>0$ 时的
+$\jj/\omega$ 频率依赖，因此 \eqref{eq:affine-lossless} 不再充分。\code{AlpsSweep}
+读到 \code{lossless==false} 时直接抛 \code{runtime\_error} 提示 \code{--sweep direct}。
+
+\subsection{第四步：虚拟端口展开}
+\label{sec:step-port}
+
+最后由注册的 \code{IBoundaryCondition} 列表（典型为 \code{WavePortBC}）通过
+\code{affineContributions(ctx)} 给出每个虚拟端口的 $(\bm m_v,k_{c,v}^{2},\dots)$。
+\code{WavePortBC::affineContributions} 内部对每个 \code{ProjectPort} 先看
+\code{portModeSolver.multiMode(faceId)}：
+\begin{enumerate}
+\item TFE 多模（\code{multiMode != nullptr}）：按 \code{modeIndex} 顺序把每个解析模 $m$
+都打成一个 \code{AffinePortContribution}，
+\code{isExcitationMode} 仅在 $m=\,$\code{excitationModeIndex} 且 \code{port.excited}
+同时成立时为真；
+\item NPM/APM 单模（\code{multiMode == nullptr}）：直接调用
+\code{portModeSolver.solve(faceId)}（NPM 走二维 H(curl) 本征，APM 走闭式 TE10 投影），
+产出唯一一个虚拟端口。
+\end{enumerate}
+对每个 contribution 内部还会过滤掉落在 \code{ctx.constrainedDofs} 里的 dof，
+保证 $\bm m_v$ 与 $\bm K,\bm M$ 共用同一稀疏图。汇总循环是：
+\begin{lstlisting}
+for (const auto& cond : bcs_) {
+    if (!cond) continue;
+    for (auto& contrib : cond->affineContributions(ctx)) {
+        out.portFaceIds.push_back     (contrib.faceId);
+        out.portCutoffSquared.push_back(contrib.cutoffSquared);
+        out.portCoupling.push_back    (std::move(contrib.coupling));
+        out.projectPortIndex.push_back(contrib.projectPortIndex);
+        out.isExcitationMode.push_back(contrib.isExcitationMode);
+    }
+}
+\end{lstlisting}
+
+\bigskip
+
+把这四步串起来，\code{buildAffineSystem()} 实际给出的就是 \eqref{eq:affine-lossless}
+所需要的全部素材，只是把抽象数学量映射到 C++ 数据结构：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+数学量 & 代码字段 & 装配位置 \\ \midrule
+$\bm K=\sum_T\mu_{r,T}^{-1}\bm K^T$       & \code{out.K}                & §\ref{sec:step-vol} \code{assembleVolumePiece(...,true)}  \\
+$\bm M=\sum_T\varepsilon_{r,T}\bm M^T$    & \code{out.M}                & §\ref{sec:step-vol} \code{assembleVolumePiece(...,false)} \\
+$\bm m_v$（每虚拟端口）                    & \code{out.portCoupling[v]}  & §\ref{sec:step-port} \code{affineContributions} \\
+$k_{c,v}^{2}$                             & \code{out.portCutoffSquared[v]} & 同上 \\
+$v\to$ 物理端口面 id                       & \code{out.portFaceIds[v]}   & 同上 \\
+$v\to$ ProjectPort 索引                    & \code{out.projectPortIndex[v]} & 同上 \\
+是否激励模                                  & \code{out.isExcitationMode[v]} & 同上 \\
+PEC 约束 dof 集                             & \code{out.constrainedDofs}  & §\ref{sec:pec} \code{cachedConstrainedDofs} \\
+$\sigma\equiv0$ 判定                       & \code{out.lossless}         & §\ref{sec:lossless-flag} \\
+\bottomrule
+\end{tabular}
+\caption{\code{AffineSystem} 字段与数学模型量的一一对应。}
+\end{table}
+
+\section{PEC 零 Dirichlet 投影}
+\label{sec:pec}
+
+PEC 面 $\Gamma_e$ 上要求 $\bm n\times\bm E=0$，棱元离散后即"$\Gamma_e$ 上所有切向边 dof 强置零"。
+代码用 \code{collectPecConstrainedDofs()} 扫一次表面三角列表，把不属于任何端口的边
+全部塞进 \code{cachedConstrainedDofs}。这个集合在 \code{buildAffineSystem()} 里有三处用途：
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{稀疏图}：\code{volumePatternFor} 中跳过任意端含约束 dof 的 $(a,b)$ 对，
+保证 $\bm K,\bm M$ 不在这些行/列上插入条目。
+\item \textbf{累加}：\code{assembleVolumePiece} 中重复同样的过滤，单元贡献不写入约束行/列。
+\item \textbf{端口耦合}：\code{WavePortBC::affineContributions} 中对每个 $\bm m_v$ 内部
+过滤约束 dof，避免端口耦合向量的支撑超出 $\bm K,\bm M$ 的稀疏图。
+\end{enumerate}
+
+注意 \code{buildAffineSystem()} \emph{不}\ 在 $\bm K,\bm M$ 上做 \code{imposeZeroDirichlet}
+那样的"主对角线置 1"操作；它选择的是\emph{投影}\ 路径——直接把约束 dof 从矩阵稀疏图上剔除，
+等价于在缩减子空间 $\{x_i=0,\,i\in\text{PEC}\}$ 上写下系统。约束 dof 集仍随 \code{AffineSystem}
+传给 \code{AlpsSweep}，方便下游做一致性检查或重建满空间向量。
+
+\section{装配后的不变量}
+\label{sec:invariants}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{$\bm K,\bm M$ 实对称}：上三角 CSR 复矩阵但虚部恒为 0，由 \eqref{eq:K-M-global}
+本身的实数性保证；引入张量介质后需要扩展为多分量缓存。
+\item \textbf{虚拟端口排序}：\code{out.portCoupling} 等数组按
+"\code{projectPortIndex} 升序、其内 \code{modeIndex} 升序" 排列，与
+\code{WavePortBC::affineContributions} 的循环次序一致。\code{AlpsSweep} 中的
+\code{dominantVirtualByProject[]} 依赖这个顺序定位每个物理端口的主模虚拟端口。
+\item \textbf{激励唯一性}：每个 \code{projectPortIndex} 至多一个 \code{isExcitationMode==true}。
+NPM/APM 单模情形下"唯一" 等价于"全部"。
+\item \textbf{$\bm m_v$ 与 $\bm K,\bm M$ 同图}：约束 dof 在三处一致剔除，不会出现
+$\bm m_v\bm m_v^{\transpose}$ 在 $\bm K+\jj\beta_v\bm m_v\bm m_v^{\transpose}$ 引入新的非零位置。
+\item \textbf{复对称投影}：下游 ALPS 用不带共轭的双线性 $\bm V^{\transpose}\bm K\bm V$ 做
+Galerkin 投影。$\bm K,\bm M$ 的实对称性 $+$ $\bm m_v\bm m_v^{\transpose}$ 的复对称性
+共同保证 $\bm A(\omega)$ 在 \eqref{eq:affine-lossless} 下严格复对称，进而 ROM
+也保留这一结构。
+\end{enumerate}
+
+\section{\texorpdfstring{下游用法：构造 \code{AlpsSweep} 的 ROM 矩阵}{下游用法：构造 AlpsSweep 的 ROM 矩阵}}
+\label{sec:downstream}
+
+为完整说明 \code{buildAffineSystem()} 输出的"够用性"，简述下游 \code{AlpsSweep::buildOffline}
+对它的消费方式。在中心频率 $\omega_0$ 处，\code{AlpsSweep} 以
+\begin{equation}
+    \bm A_0=\bm K-k_0^{2}(\omega_0)\bm M+\jj\sum_v\beta_v(\omega_0)\,\bm m_v\bm m_v^{\transpose}
+\end{equation}
+做 Pardiso 因式分解；接着对每个虚拟端口求解 $\bm A_0\bm w_v^{(1)}=\bm m_v$
+作为 Krylov 子空间起始向量；递推
+\begin{equation}
+    \bm A_0\bm w_v^{(k+1)}=\bm M\bm w_v^{(k)}
+\end{equation}
+（注意右端只用到\emph{频率无关}\ 的 $\bm M$）生成 $r$ 阶矩匹配子空间，再做
+modified Gram--Schmidt 正交化得到 $\bm V$。投影后的 ROM
+\begin{equation}
+    \bm K_r=\bm V^{\transpose}\bm K\bm V,\qquad
+    \bm M_r=\bm V^{\transpose}\bm M\bm V,\qquad
+    \bm m_{v,r}=\bm V^{\transpose}\bm m_v
+\end{equation}
+是几十到几百维的稠密小矩阵，最终在每个频点 $\omega$ 求解
+\begin{equation}
+    \Bigl(\bm K_r-k_0^{2}\bm M_r+\jj\sum_v\beta_v(\omega)\bm m_{v,r}\bm m_{v,r}^{\transpose}\Bigr)
+    \bm x_r(\omega)=\bm b_r(\omega)
+\end{equation}
+即可获得端口响应，避免重建全空间场。整条链路对 $\bm K,\bm M,\bm m_v,k_{c,v}^{2}$
+的需求都由 \code{buildAffineSystem()} 一次性满足。
+
+\section{当前限制与扩展点}
+\label{sec:limits}
+
+\begin{enumerate}[leftmargin=2em]
+\item \textbf{有损介质未仿射化}：$\sigma>0$ 时 \code{lossless==false}，调用方走 direct path。
+延伸方向是缓存 $\bm M_\sigma=\sum_T\sigma_T\bm M^T$ 作为第三块全局矩阵，
+仿射展开多一项 $\jj\,(k_0^{2}/(\omega\varepsilon_0))\bm M_\sigma$，
+ALPS Krylov 递推再加一个右端 $\bm M_\sigma\bm w_v^{(k)}$。
+\item \textbf{各向异性介质}：\eqref{eq:Ke}--\eqref{eq:Me} 假设 $\mu_r,\varepsilon_r$ 标量，
+对张量介质需要把 $\bm K^T,\bm M^T$ 拆成多分量并各自加权。
+\item \textbf{端口模式频率无关性}：\eqref{eq:m_p} 假设 $\bm e_{p,m}^{\perp}$ 与 $\omega$ 无关，
+这是 ALPS 仿射展开的代数前提。NPM/TFE 路径下这要求二维 H(curl) 本征问题
+\eqref{eq:port-eig} 的特征对（在频带内不发生模式交叉的前提下）频率无关，
+对常规均匀填充波导自动满足；色散填充或开放波导需要单独处理。
+APM 路径假设矩形 TE10 闭式同样频率无关。
+\item \textbf{ABC/SIBC 边界条件}：当前 \code{IBoundaryCondition::affineContributions} 默认空。
+吸收边界、阻抗边界一般给出多项形式（含 $\sqrt{\jj\omega}$ 等），
+若要纳入仿射展开需要额外的项。
+\end{enumerate}
+
+\section{小结}
+
+\code{FEMAssembler::buildAffineSystem()} 把频域 curl--curl FEM 系统在 lossless 假设下
+彻底拆成 \eqref{eq:affine-lossless} 的"频率无关矩阵 $+$ 频率函数加权"形式，
+为 ALPS 等矩匹配快速扫频提供严格的代数基础。其实现遵循三条主线：
+单元参考矩阵缓存（§\ref{sec:step-cache}）、体积全局矩阵装配（§\ref{sec:step-vol}）、
+经 \code{IBoundaryCondition} 分发的虚拟端口展开（§\ref{sec:step-port}）；
+PEC 投影（§\ref{sec:pec}）和损耗标志（§\ref{sec:lossless-flag}）作为两条横切机制
+保证后续 ROM 与单频点 direct path 的等价性。
+
+\end{document}

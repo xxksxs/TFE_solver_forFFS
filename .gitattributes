@@ -1,0 +1,34 @@
+# Default: normalize text files to LF in the repo, restore native EOL on checkout.
+* text=auto eol=lf
+
+# Source files: treat as text, LF in repo (matches what most contributors expect).
+*.cpp    text eol=lf
+*.hpp    text eol=lf
+*.h      text eol=lf
+*.c      text eol=lf
+*.cc     text eol=lf
+*.txt    text eol=lf
+*.md     text eol=lf
+*.tex    text eol=lf
+*.cmake  text eol=lf
+CMakeLists.txt text eol=lf
+
+# Python tooling.
+*.py     text eol=lf
+
+# Windows-only convenience scripts: keep CRLF so they run under cmd.exe.
+*.bat    text eol=crlf
+*.ps1    text eol=crlf
+
+# Project / mesh / reference data: binary so git does not try to diff
+# or auto-convert line endings.
+*.aedt    binary
+*.ngmesh  binary
+*.pdf     binary
+*.png     binary
+*.jpg     binary
+*.vtu     binary
+
+# CSV reference data: text but never auto-convert (HFSS exports come
+# from a Windows tool and must round-trip cleanly).
+*.csv    text eol=lf

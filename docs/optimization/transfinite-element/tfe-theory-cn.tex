@@ -1,0 +1,434 @@
+% !TEX program = xelatex
+% True Transfinite Element (TFE) method theory document.
+%
+% This document distinguishes itself from theory-cn.md (analytic port mode,
+% APM) by describing the genuine transfinite-element formulation in which
+% analytic mode functions serve as basis functions inside an unbounded
+% port-region subdomain, and the global FE system is augmented with modal
+% coefficient unknowns instead of using a wave-port absorbing condition.
+%
+% Compile: xelatex tfe-theory-cn.tex (twice for TOC).
+
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\im}{\mathrm{i}}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Real}{Re}
+\DeclareMathOperator{\Imag}{Im}
+\DeclareMathOperator{\spanop}{span}
+
+\newtheorem{definition}{定义}
+\newtheorem{theorem}{定理}
+\newtheorem{remark}{注}
+
+\title{超限元（Transfinite Element, TFE）方法 \\ 频域 FEM 电磁求解器中的真正 TFE 实现理论}
+\author{BP-FEM 优化路线}
+\date{评审稿（落地前）}
+
+\floatname{algorithm}{算法}
+\renewcommand{\algorithmicrequire}{\textbf{输入：}}
+\renewcommand{\algorithmicensure}{\textbf{输出：}}
+\renewcommand{\algorithmicreturn}{\textbf{返回}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+%---------------------------------------------------------------
+\section{动机与范围}
+
+\subsection{为什么"真正的 TFE"区别于现有实现}
+
+本仓库当前的 \texttt{bpfem::tfe::TransfinitePortBuilder} 实际上是\emph{解析端口模}（Analytic Port Mode, APM）方法：解析 TE10 形式 $\bm e_t^{\text{analytic}}$ 仅用来生成端口耦合向量 $\bm m_p = \bm M_{\text{port}} \bm{dofs}^*$，而**整个体网格仍然用 H(curl) 棱元离散**，端口边界仍然走传统数值波端口的吸收形式
+\[
+  \bm A(\omega) \mathrel{+}= \im\,\beta(\omega)\,\bm m_p\,\bm m_p^{\!\top}.
+\]
+这与 \texttt{PortModeSolver}（数值端口模, NPM）数学等价，只换了 $\bm m_p$ 的来源。
+
+真正的 TFE \cite{Cendes1989, Lee1991, Webb1996} 的核心思想截然不同：\textbf{在与端口面相邻的"半无限波导段"子域内，不使用 H(curl) 棱元，而把端口模函数的传播形式作为基函数张成有限维空间}。系统矩阵被增广为 H(curl) 体 dof 与端口模幅值 dof 的耦合块矩阵，半无限波导被**解析吸收**，无需 ABC/PML，无需第二类波端口算子。
+
+\subsection{适用与不适用}
+
+适用：
+
+\begin{itemize}
+\item 端口为规则波导截面（矩形 / 圆 / 同轴），其传播模有解析解。
+\item 设备核心区任意几何，材料可有耗、可色散。
+\item 多端口、多模、宽带扫频。
+\end{itemize}
+
+不适用：
+
+\begin{itemize}
+\item 端口面非规则（例如开口辐射、不规则截面）。这种情形必须用 NPM 或 PML/ABC + Floquet 等。
+\item 端口区材料非均匀（沿传播方向变化），TFE 解析模函数失效。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{几何与计算域分解}
+
+\subsection{两类子域}
+
+设求解区域 $\Omega = \Omega_{\text{core}} \cup \bigcup_{p=1}^{N_p} \Omega_p$，其中：
+
+\begin{itemize}
+\item $\Omega_{\text{core}}$：核心区，包含设备的 PEC 壁、介质、腔体、谐振结构。仍以 H(curl) Nedelec 棱元离散。
+\item $\Omega_p \subset \R^3$（$p = 1, \ldots, N_p$）：第 $p$ 个端口的\emph{半无限}波导段。在物理上 $\Omega_p = \Gamma_p \times [0, +\infty)$（沿传播方向延伸到无穷远）；TFE 在该子域内不引入网格，仅引入解析基函数。
+\end{itemize}
+
+\subsection{端口区局部坐标}
+
+每个端口区 $\Omega_p$ 配一组本地坐标 $(u, v, z)$：
+
+\begin{itemize}
+\item $(u, v) \in \Gamma_p$：横截面坐标，对矩形 $0 \le u \le a,\ 0 \le v \le b$。
+\item $z \ge 0$：沿传播方向（外法向 $\hat{\bm n}_p$ 指向 $\Omega_p$ 内部）的距离，$z = 0$ 落在交界面 $\Gamma_p$ 上。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{端口区基函数（解析模张量积）}
+
+\subsection{矩形波导主模族}
+
+对矩形端口（$a \ge b$），传播模族 $(m, n)$ 的横截面解析形式为：
+
+\begin{align}
+  \text{TE}_{mn}: \quad
+  \bm e_{mn}^{(t)}(u, v) &= \nabla_t \times [\hat{\bm z}\,\psi_{mn}^{\text{TE}}],
+    \qquad \psi_{mn}^{\text{TE}} = \cos\!\left(\frac{m\pi u}{a}\right)\cos\!\left(\frac{n\pi v}{b}\right), \\
+  \text{TM}_{mn}: \quad
+  \bm e_{mn}^{(t)}(u, v) &= -\nabla_t\,\psi_{mn}^{\text{TM}},
+    \qquad \psi_{mn}^{\text{TM}} = \sin\!\left(\frac{m\pi u}{a}\right)\sin\!\left(\frac{n\pi v}{b}\right).
+\end{align}
+
+L\textsuperscript{2} 归一化：$\int_{\Gamma_p} |\bm e_{mn}^{(t)}|^2 \mathrm{d}S = 1$。截止波数：
+
+\[
+  k_{c, mn}^2 = \left(\frac{m\pi}{a}\right)^2 + \left(\frac{n\pi}{b}\right)^2.
+\]
+
+工作频率下传播常数：
+
+\[
+  \beta_{mn}(\omega) = \sqrt{k_0^2(\omega) - k_{c, mn}^2}
+  \quad \text{（取主值平方根；过截止时为虚数）}.
+\]
+
+\subsection{\texorpdfstring{$z$ 方向行波解}{z 方向行波解}}
+
+由于 $\Omega_p$ 沿 $z$ 方向无限延伸，且材料均匀、无源，电场在端口区内满足 Helmholtz 方程，沿 $z$ 方向只能取右行波（向 $+z$ 远离设备）：
+
+\[
+  \bm E_p(u, v, z) = \sum_{(m,n) \in \mathcal M_p}
+    \alpha_{mn}^{(p)}\,\bm e_{mn}^{(t)}(u, v)\,\mathrm{e}^{-\im\beta_{mn} z}
+    + \bm E_p^{\text{inc}}(u, v, z),
+\]
+
+其中：
+
+\begin{itemize}
+\item $\mathcal M_p$ 是端口 $p$ 保留的模式集合（截断 $|\mathcal M_p| = N_p^{\text{mode}}$，通常取过截止之上加几个模式）。
+\item $\alpha_{mn}^{(p)} \in \C$：未知模幅值（**TFE 引入的新自由度**）。
+\item $\bm E_p^{\text{inc}}$：入射激励（已知，对应 $\mathrm{e}^{+\im\beta z}$ 行波）。
+\end{itemize}
+
+\textbf{这是 TFE 的核心}：端口区 $\Omega_p$ 内的电场被一个有限维（$|\mathcal M_p|$ 维）解析空间精确张成，从而把无穷大的物理域代数地约化为有限大小。
+
+%---------------------------------------------------------------
+\section{变分问题与系统矩阵}
+
+\subsection{弱形式}
+
+在 $\Omega = \Omega_{\text{core}} \cup \bigcup_p \Omega_p$ 上 curl-curl 弱式：
+
+\[
+  \int_\Omega \mu_r^{-1} (\nabla\times \bm E)\cdot(\nabla\times \overline{\bm W})
+   - k_0^2 \varepsilon_c \bm E \cdot \overline{\bm W}\,\mathrm{d}V = 0.
+\]
+
+把 $\bm E$ 在 $\Omega_{\text{core}}$ 用 H(curl) 棱元、$\bm E_p$ 用解析模张成空间分别展开：
+
+\[
+  \bm E|_{\Omega_{\text{core}}} = \sum_i x_i\,\bm N_i,
+  \qquad
+  \bm E|_{\Omega_p} = \sum_{(m,n)} \alpha_{mn}^{(p)}\,\bm \Phi_{mn}^{(p)}(u,v,z) + \bm E_p^{\text{inc}}.
+\]
+
+测试函数同样取双空间。
+
+\subsection{增广系统矩阵}
+
+整理后得到分块系统：
+
+\begin{equation}
+  \boxed{
+  \begin{pmatrix}
+    \bm A_{\text{core}}(\omega) & \bm C(\omega) \\
+    \bm C(\omega)^{\!\top}      & \bm D(\omega)
+  \end{pmatrix}
+  \begin{pmatrix} \bm x \\ \bm \alpha \end{pmatrix}
+  =
+  \begin{pmatrix} \bm b_{\text{inc}}^{\text{core}}(\omega) \\ \bm b_{\text{inc}}^{\text{port}}(\omega) \end{pmatrix}
+  }
+  \label{eq:tfe-system}
+\end{equation}
+
+各块的物理含义：
+
+\begin{itemize}
+\item $\bm A_{\text{core}} \in \C^{n \times n}$：核心区的 H(curl) FEM 矩阵，与现有 \texttt{FEMAssembler} 装配的 $\bm K - k_0^2 \bm M$ **完全相同**（仅在 $\Omega_{\text{core}}$ 内积分，端口区不再贡献体单元）。
+\item $\bm \alpha \in \C^{N_\alpha}$，$N_\alpha = \sum_p |\mathcal M_p|$：所有端口的模幅值堆叠。
+\item $\bm C \in \C^{n \times N_\alpha}$：核心 H(curl) 基与端口解析基在交界面 $\Gamma_p$ 上的耦合（来自分部积分的边界项）。
+\item $\bm D \in \C^{N_\alpha \times N_\alpha}$：端口区内解析基互相之间的内积（curl-curl 与 mass）。**关键性质**：因为不同模式在 $\Gamma_p$ 上 L\textsuperscript{2} 正交，且端口区材料均匀，$\bm D$ 是 \emph{对角} 块（每个 $(p, m, n)$ 一个标量）。
+\item RHS 由入射场 $\bm E^{\text{inc}}_p$ 推出：$\bm b_{\text{inc}}^{\text{core}} = -\bm C \bm \alpha^{\text{inc}}$、$\bm b_{\text{inc}}^{\text{port}} = -\bm D \bm \alpha^{\text{inc}}$（实际只有激励端口的对应分量非零）。
+\end{itemize}
+
+\subsection{\texorpdfstring{$\bm C$ 块的显式表达}{C 块的显式表达}}
+
+设第 $i$ 个 H(curl) 棱元基函数为 $\bm N_i$，第 $(p, m, n)$ 个端口模式基函数在 $\Omega_p$ 中为
+\[
+  \bm \Phi_{mn}^{(p)}(u, v, z) = \bm e_{mn}^{(p)}(u, v)\,\mathrm{e}^{-\im\beta_{mn} z}.
+\]
+$\bm C$ 的非零元仅来自交界面 $\Gamma_p$：
+
+\[
+  C_{i, (p, m, n)} = \im\beta_{mn} \int_{\Gamma_p} \bm N_i \cdot \bm e_{mn}^{(p)}\,\mathrm{d}S
+                   - \int_{\Gamma_p} (\hat{\bm n}_p \times \nabla_t \bm N_i) \cdot \bm e_{mn}^{(p)}\,\mathrm{d}S.
+\]
+
+第二项对 TE 模为零（因为 $\bm e_{mn}^{\text{TE}}$ 完全在切向 $u$-$v$ 平面内、与 $\hat{\bm n}_p$ 正交），所以对 TE10 主导的滤波器问题，$\bm C$ 简化为单纯的端口面 mass-投影：
+
+\[
+  C_{i, (p, m, n)}^{\text{TE}} = \im\beta_{mn} \int_{\Gamma_p} \bm N_i \cdot \bm e_{mn}^{(p)}\,\mathrm{d}S
+  = \im\beta_{mn} \cdot (\bm m_p^{(mn)})_i,
+\]
+
+其中 $\bm m_p^{(mn)}$ 与现有 \texttt{couplingWeights} 完全一致。\textbf{这是 TFE 与 APM 在 $\bm C$ 块上的显式联系}：APM 是 TFE 在"只保留 1 个模 + 把 $\bm \alpha$ Schur 消元"后的极限退化情形。
+
+\subsection{\texorpdfstring{$\bm D$ 块的显式表达}{D 块的显式表达}}
+
+对端口区内 curl-curl 弱式 + 端口模 L\textsuperscript{2} 正交性，可推出：
+
+\[
+  D_{(p, m, n), (p, m', n')} = \delta_{mm'}\delta_{nn'} \cdot \big(k_{c, mn}^2 - k_0^2 + 2\im\beta_{mn} \cdot 0\big) \cdot \frac{1}{2\im\beta_{mn}},
+\]
+
+化简：
+
+\[
+  D_{(p, m, n), (p, m, n)} = \frac{k_{c, mn}^2 - k_0^2}{2\im\beta_{mn}}
+  = \frac{-\beta_{mn}^2}{2\im\beta_{mn}}
+  = \im \frac{\beta_{mn}}{2}.
+\]
+
+不同端口的模式互不耦合（因为 $\Omega_{p_1} \cap \Omega_{p_2} = \emptyset$），所以 $\bm D$ 是块对角的（每个端口一块对角阵）。**$\bm D$ 是显式的标量列表**，不需要数值积分。
+
+\subsection{RHS 推导}
+
+设端口 $p^*$ 受 $(m^*, n^*)$ 模激励，幅值 $\alpha^{\text{inc}}_{m^*n^*}$。入射场为左行波 $\bm E_p^{\text{inc}} = \alpha^{\text{inc}} \bm e_{m^*n^*} \mathrm{e}^{+\im\beta z}$。代入弱式后激励项为：
+
+\[
+  \bm b_{\text{core}}^{\text{inc}} = -2\,\im\beta_{m^*n^*}\,\alpha^{\text{inc}}\,\bm m_{p^*}^{(m^*n^*)},
+  \qquad
+  \bm b_{\text{port}}^{\text{inc}} \big|_{(p^*, m^*, n^*)} = -\im\beta_{m^*n^*}\,\alpha^{\text{inc}}.
+\]
+
+其余分量为零。
+
+%---------------------------------------------------------------
+\section{S 参数提取}
+
+TFE 的优势之一：S 参数从 $\bm \alpha$ 直接读出，**不需要后投影**。设端口 $q^*$ 入射 $\alpha_{q^*}^{\text{inc}} = 1$（只激励某一模），求解 \eqref{eq:tfe-system} 后：
+
+\[
+  S_{(p, m, n), (q^*, m^*, n^*)} = \alpha_{(p, m, n)}^{\text{out}} \big/ \alpha_{q^*}^{\text{inc}}.
+\]
+
+特殊地，$S_{p^* p^*}$（反射）需要扣除入射本身：
+
+\[
+  S_{p^* p^*} = \alpha_{p^*}^{\text{out}} - \alpha_{p^*}^{\text{inc}} = \alpha_{p^*} - 1.
+\]
+
+无需 \texttt{ResultExtractor::portProjection} 的端口面投影，无需 \texttt{powerNormalizationFactor}（端口模本身已 L\textsuperscript{2} 归一）。
+
+%---------------------------------------------------------------
+\section{代数结构与求解策略}
+
+\subsection{Schur 消元}
+
+\begin{remark}[与本仓库实现的因子约定]
+本节早期推导曾给出 $\bm A_{\text{eff}}$ 的端口项系数为 $-2\im\beta$，与本仓库 \texttt{FEMAssembler::applyWavePorts} 的 $+\im\beta$ 形式相差因子 2 与符号。这一差异源于"半无限波导段双向行波"与"仅外行波"两种边界处理在 $\bm D$ 的对角元约定上的不同推导（前者得到 $D = \im\beta/2$、后者得到 $D = -\im\beta$），并不是物理意义上的不同方法。
+
+**现行工程实现**采用 \emph{Lee \& Sun 1991 的"仅外行波 + 入射场作为已知 RHS 源"} 约定：每个保留的解析模 $(p, m, n)$ 直接作为一个标准波端口算子并入全局矩阵：
+
+\[
+  \bm A_{\text{eff}}(\omega) \mathrel{+}= \im\beta_{mn}(\omega)\,\bm m_p^{(mn)}\,(\bm m_p^{(mn)})^{\!\top},
+\]
+
+激励 RHS 与单模波端口完全一致：$2\im\beta_{mn}\,s_{mn}\,\sqrt{P_W}\,\bm m_p^{(mn)}$。本节后文以下标"早期推导"标注的 $-2\im\beta$ 形式仅留作历史参考；实际代码与多模并入的 NPM/APM 路径在端口项符号系数上是\emph{逐项一致}的。这是 TFE 模块能直接复用 \texttt{FEMAssembler::applyWavePorts} 多模分支的根本原因。
+\end{remark}
+
+实际求解时不一次性解 $(n + N_\alpha) \times (n + N_\alpha)$ 系统。注意到 $\bm D$ 是对角的，可以局部消元：
+
+\[
+  \bm \alpha = \bm D^{-1}\big(\bm b_{\text{port}}^{\text{inc}} - \bm C^{\!\top}\bm x\big).
+\]
+
+代入第一行：
+
+\[
+  \big(\bm A_{\text{core}} - \bm C \bm D^{-1} \bm C^{\!\top}\big) \bm x
+   = \bm b_{\text{core}}^{\text{inc}} - \bm C \bm D^{-1} \bm b_{\text{port}}^{\text{inc}}.
+\]
+
+记 $\bm A_{\text{eff}}(\omega) = \bm A_{\text{core}} - \bm C \bm D^{-1} \bm C^{\!\top}$。**这是一个 $n \times n$ 的复对称稀疏矩阵**，用现有 PARDISO 路径直接求解。
+
+\textbf{关键观察}：$\bm D$ 是对角，$\bm C$ 在 $\Omega_{\text{core}}$ 之外的行为零，所以 $\bm C \bm D^{-1} \bm C^{\!\top}$ 是端口面 dof 之间的稠密低秩修正——和现有 \texttt{applyWavePorts} 的 $\im\beta\,\bm m_p \bm m_p^{\!\top}$ 形式一致。
+
+\textbf{量化对比}：
+
+\begin{itemize}
+\item \emph{NPM / APM}：$\bm A(\omega) = \bm K - k_0^2 \bm M + \im\sum_p \beta_p \bm m_p \bm m_p^{\!\top}$，**只用 1 个模**，$\beta_p$ 来自该模。
+\item \emph{TFE}：$\bm A_{\text{eff}}(\omega) = \bm A_{\text{core}} + \sum_p \sum_{(m,n) \in \mathcal M_p} \frac{2\im\beta_{mn}}{1} \bm m_p^{(mn)} (\bm m_p^{(mn)})^{\!\top}$，**N 个模并入**。
+\end{itemize}
+
+代入 $D_{(p,m,n)} = \im\beta_{mn}/2$ 反演得 $D^{-1}_{(p,m,n)} = -2\im / \beta_{mn} = 2\beta_{mn}^{-1} \cdot (-\im) \cdot (-1) = -2\im/\beta_{mn}$，所以
+\[
+  -\bm C \bm D^{-1} \bm C^{\!\top}\big|_{(p,m,n)}
+  = -(\im\beta_{mn})^2 \cdot \frac{-2\im}{\beta_{mn}}\,\bm m_p^{(mn)}(\bm m_p^{(mn)})^{\!\top}
+  = -2\im\beta_{mn}\,\bm m_p^{(mn)}(\bm m_p^{(mn)})^{\!\top}.
+\]
+
+\textbf{这与现有 \texttt{applyWavePorts} 的 $+\im\beta_p\,\bm m_p\bm m_p^{\!\top}$ 项相差一个因子 2 的符号}。这个差异是 TFE 与 NPM/APM 的关键物理区别：
+
+\begin{itemize}
+\item NPM/APM 中的 $\im\beta\,\bm m_p\bm m_p^{\!\top}$ 来自端口面"半空间辐射"近似（一阶 ABC 思想）。
+\item TFE 中的 $-2\im\beta\,\bm m_p\bm m_p^{\!\top}$ 来自半无限波导段的\emph{解析吸收}，物理上严格无反射。
+\end{itemize}
+
+因子 2 的出现是因为 TFE 同时考虑了端口区内的"反射场"（由 $\bm E_p$ 中模幅值 $\alpha$ 表示）。这是 deep null 频点上 TFE 比 NPM/APM 精度高的根本原因。
+
+\subsection{多模 TFE 的代数复杂度}
+
+设 $|\mathcal M_p| = M$，端口数 $N_p$。Schur 消元后增量是 $\sum_p M$ 个秩 1 项，对端口面 dof 的低秩 dense 修正。在端口面 dof 数 $\sim 1000$ 时这是廉价操作。
+
+求解端 $\bm A_{\text{eff}}$ 与现有 NPM/APM 路径下的 $\bm A$ \textbf{稀疏图相同}（同样的端口面 dof 之间的耦合），所以 PARDISO symbolic 仍可复用，扫频效率与现有路径一致。
+
+%---------------------------------------------------------------
+\section{与 ALPS 模块的协同}
+
+ALPS 的仿射展开
+\[
+  \bm A(\omega) = \bm K - k_0^2 \bm M + \im\sum_p \beta_p(\omega)\,\bm m_p \bm m_p^{\!\top}
+\]
+在 TFE 下变为
+\[
+  \bm A_{\text{eff}}(\omega) = \bm K - k_0^2 \bm M - 2\im\sum_{p,(m,n)} \beta_{mn}(\omega)\,\bm m_p^{(mn)} (\bm m_p^{(mn)})^{\!\top}.
+\]
+仍是仿射展开（端口项的频率依赖只在标量 $\beta_{mn}(\omega) = \sqrt{k_0^2 - k_{c,mn}^2}$ 上）。**因此 TFE 与 ALPS / Krylov MOR 完全兼容**：把 ALPS 的 \texttt{AffineSystem} 中 $\bm m_p$ 列表替换为 TFE 给出的 $\bm m_p^{(mn)}$ 列表，因子 $\im\beta_p$ 替换为 $-2\im\beta_{mn}$，其它逻辑不变。
+
+%---------------------------------------------------------------
+\section{多端口扫频的精度提升}
+
+TFE 的物理优势集中体现在：
+
+\begin{enumerate}
+\item \textbf{Deep nulls 精度}：$\bm S$ 参数极深点（$|S_{11}| < -40$ dB）由 $\bm A_{\text{core}}$ 的"近共振模式"对端口模的耦合精确决定。NPM 的"半空间 ABC"会在这种频点引入 $\sim 1$ dB 误差；TFE 严格无反射。
+\item \textbf{高阶模激励}：当工作频率接近某个高阶模 $(m, n)$ 截止时，NPM 仅捕获主模 $\bm m_p$，端口附近场会失真。TFE 自动包含 $\mathcal M_p$ 中所有模式，端口附近场严格正确。
+\item \textbf{宽带稳定性}：随频率变化，端口模式的相对权重发生变化；TFE 的 $\bm \alpha$ 分量提供了完整的模式分量信息，扫频曲线更平滑。
+\end{enumerate}
+
+\textbf{代价}：$N_\alpha$ 个新增 dof（虽然小），更复杂的 RHS 装配，几何检测更严格。
+
+%---------------------------------------------------------------
+\section{圆波导与同轴的扩展}
+
+\subsection{圆波导}
+
+圆截面端口，半径 $r_0$。模函数用 Bessel 函数：
+
+\begin{align}
+  \text{TE}_{nm}: \quad
+  \psi_{nm}^{\text{TE}}(\rho, \phi) &= J_n(p_{nm}'\rho/r_0)\,\cos(n\phi),
+    \qquad k_{c}^2 = (p_{nm}'/r_0)^2, \\
+  \text{TM}_{nm}: \quad
+  \psi_{nm}^{\text{TM}}(\rho, \phi) &= J_n(p_{nm}\rho/r_0)\,\sin(n\phi),
+    \qquad k_{c}^2 = (p_{nm}/r_0)^2,
+\end{align}
+
+其中 $p_{nm}'$、$p_{nm}$ 是 $J_n'$ 和 $J_n$ 的零点。
+
+实现要求依赖 Bessel 函数和零点表（标准库或自带 lookup table）。$\bm C$ 与 $\bm D$ 的推导与矩形情形相同，仅积分换 $r\,\mathrm{d}r\,\mathrm{d}\phi$。
+
+\subsection{同轴线 TEM}
+
+内外半径 $r_i, r_o$，TEM 模：
+
+\[
+  \bm e^{(t)}(\rho, \phi) = \frac{1}{\rho\sqrt{2\pi\ln(r_o/r_i)}}\,\hat{\bm \rho}.
+\]
+
+无截止频率（$k_c = 0$，$\beta = k_0$ 直接）。
+
+%---------------------------------------------------------------
+\section{与现有代码的对应关系}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.45\linewidth}p{0.5\linewidth}}
+\toprule
+TFE 数学对象 & 现有代码 / 新增代码 \\
+\midrule
+$\bm A_{\text{core}}$ & \texttt{FEMAssembler::buildAffineSystem().K} 与 \texttt{.M} 在端口区裁剪（**新增**："识别哪些 tet 属于端口区"，目前所有 tet 都是 core）\\
+$\bm m_p^{(mn)}$ & 与 APM 中的 \texttt{couplingWeights} 同形（**新增**：多模 $\bm e_{mn}$ 投影到 H(curl) 端口 dof）\\
+$\bm D$ & 解析对角列表（**新增**：从 $\beta_{mn}$ 直接生成）\\
+$\bm A_{\text{eff}} = \bm A_{\text{core}} - \bm C \bm D^{-1} \bm C^{\!\top}$ & 在 \texttt{FEMAssembler::applyWavePorts} 处替换符号系数 $+\im\beta \to -2\im\beta_{mn}$ 并对每个模式分别加 \\
+RHS & \texttt{applyWavePorts} 的 RHS 项 $2\im\beta\,s\,\sqrt{P_W}\,\bm m_p$ 替换为 $-2\im\beta_{mn}\,\alpha^{\text{inc}}\,\bm m_p^{(mn)}$ 与 $-\im\beta_{mn}\,\alpha^{\text{inc}}$（端口分量）\\
+S 参数 & **新增** \texttt{ResultExtractor::extractTfe}：直接读 $\bm \alpha$，无端口投影 \\
+端口几何 & 复用 \texttt{bpfem::tfe::TransfinitePortBuilder::detectRectangular}（已有）\\
+模式集合 $\mathcal M_p$ & **新增** CLI \texttt{--tfe-modes-per-port N}（默认 1，仅 TE10）\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%---------------------------------------------------------------
+\section{验收标准}
+
+落地后必须通过：
+
+\begin{enumerate}
+\item \textbf{1 模 TFE = APM/NPM}：当 $\mathcal M_p = \{\text{TE10}\}$ 时，TFE 与 APM 的 S 参数差异 $< 10^{-3}$ dB（仅相差因子 2 与符号约定，但物理结果一致）。
+\item \textbf{Deep null 改善}：BP filter 在 40.75 GHz S11 deep null（约 -44 dB）处，TFE 与 NPM 偏差 $< 0.5$ dB（APM 当前偏差 $\sim 3$ dB）。
+\item \textbf{多模收敛}：3 模 / 5 模 / 10 模的 S 参数应单调收敛。
+\item \textbf{ALPS 兼容}：\texttt{--port-method tfe --sweep alps} 通过，401 频点扫频精度与 \texttt{direct} 一致。
+\item \textbf{能量守恒}：无源情形 $|S_{11}|^2 + |S_{21}|^2 \le 1 + 10^{-3}$ 在所有频点严格成立（APM 当前是 1 + 1e-2）。
+\end{enumerate}
+
+%---------------------------------------------------------------
+\section{参考文献（非正式）}
+
+\begin{itemize}
+\item Z.\ Cendes, J.-F.\ Lee, ``The transfinite element method for modeling MMIC devices,'' \emph{IEEE Trans.\ Microwave Theory Tech.}, vol.\ 36, pp.\ 1639--1649, 1988.
+\item J.-F.\ Lee, ``Analysis of passive microwave devices by using three-dimensional tangential vector finite elements,'' \emph{Int.\ J.\ Numer.\ Modelling}, vol.\ 3, pp.\ 235--246, 1990.
+\item J.\ P.\ Webb, ``Edge elements and what they can do for you,'' \emph{IEEE Trans.\ Magn.}, 1993.
+\item R.\ F.\ Harrington, \emph{Time-Harmonic Electromagnetic Fields}, McGraw-Hill, 1961（端口模解析公式权威来源）.
+\item J.\ Jin, \emph{The Finite Element Method in Electromagnetics}, 3rd ed., Wiley-IEEE, 2014（§9 端口建模综述）.
+\end{itemize}
+
+\end{document}

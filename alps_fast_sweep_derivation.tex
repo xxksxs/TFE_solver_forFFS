@@ -1,0 +1,524 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{xurl}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\geometry{left=2.5cm,right=2.5cm,top=2.6cm,bottom=2.6cm}
+\setlist{nosep}
+\linespread{1.12}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\jj}{\mathrm{j}}
+\newcommand{\KK}{\mathcal{K}}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\CC}{\mathbb{C}}
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cB}{\mathcal{B}}
+\newcommand{\cH}{\mathcal{H}}
+\newcommand{\cI}{\mathcal{I}}
+\newcommand{\cK}{\mathcal{K}}
+\newcommand{\cL}{\mathcal{L}}
+\newcommand{\cM}{\mathcal{M}}
+\newcommand{\cO}{\mathcal{O}}
+\newcommand{\transpose}{\mathsf{T}}
+\newcommand{\herm}{\mathsf{H}}
+
+\title{ALPS 快速扫频方法的数学模型推导}
+\author{独立推导说明}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+ALPS（Adaptive Lanczos--Padé Sweep，自适应 Lanczos--Padé 扫频）是计算电磁学中常用的快速频率扫描思想：在少量中心频率处进行完整电磁求解，然后用由 Lanczos Krylov 子空间生成的 Padé 有理逼近在一段频带内外推场量和端口响应。本文不调用、不摘录、不依赖本工程已有文档，而是从频域 Maxwell 方程、有限维离散系统、矩匹配、Lanczos 投影和自适应频带覆盖几个层次独立推导其数学模型。推导中的 ALPS 指公开数值线性代数意义下的 Adaptive Lanczos--Padé Sweep；不同商业软件的工程实现可能包含额外的网格、端口和误差控制细节。
+\end{abstract}
+
+\tableofcontents
+
+\section{扫频问题的抽象形式}
+
+设时间因子为 $\exp(st)$，实际频率轴上 $s=\jj\omega$。计算电磁学中的频率扫描要求在频带
+\[
+    \Omega=[\omega_{\min},\omega_{\max}]
+\]
+上求解场量、端口阻抗、导纳或散射参数。若对每个频点都重新装配并分解大型线性系统，成本通常随频点数线性增长。ALPS 的目标是把大量频点的完整求解替换为少量中心频率处的完整求解，加上一组低阶有理模型的快速求值。
+
+离散后的频域电磁问题可统一写成
+\begin{equation}
+    A(s)x(s)=b(s),\qquad y(s)=C(s)^{\herm}x(s)+d(s),
+    \label{eq:full-system}
+\end{equation}
+其中 $x(s)\in\CC^N$ 是有限元、边界元或矩量法未知量，$y(s)\in\CC^r$ 是端口响应或观测量。快速扫频真正要近似的是输入到输出的频率响应
+\begin{equation}
+    H(s)=C(s)^{\herm}A(s)^{-1}B(s)+D(s),
+    \label{eq:transfer-general}
+\end{equation}
+而不一定需要在每个频点重建全空间场解。
+
+\section{由 Maxwell 方程得到频率参数线性系统}
+
+在各向同性线性介质中，频域 Maxwell 方程可写为
+\begin{align}
+    \nabla\times E &= -s\mu H-M_s,\\
+    \nabla\times H &= (\sigma_e+s\varepsilon)E+J_s,
+\end{align}
+其中 $\varepsilon,\mu,\sigma_e$ 分别为介电常数、磁导率和电导率。为突出 ALPS 的数学结构，先忽略磁流源 $M_s$。消去磁场 $H$ 得到电场的 curl--curl 方程
+\begin{equation}
+    \nabla\times\mu^{-1}\nabla\times E
+    +s\sigma_e E+s^2\varepsilon E
+    =-sJ_s .
+    \label{eq:curlcurl}
+\end{equation}
+在实际频率轴 $s=\jj\omega$ 上，式 \eqref{eq:curlcurl} 变为常见形式
+\[
+    \nabla\times\mu^{-1}\nabla\times E
+    +\jj\omega\sigma_e E-\omega^2\varepsilon E
+    =-\jj\omega J_s .
+\]
+
+令 $V_h=\operatorname{span}\{N_1,\ldots,N_N\}$ 为边元有限元空间，取
+\[
+    E_h(s)=\sum_{n=1}^N x_n(s)N_n .
+\]
+对测试函数 $F_h\in V_h$ 作 Galerkin 离散，可得二次参数矩阵系统
+\begin{equation}
+    \bigl(K+sD+s^2M+A_{\Gamma}(s)\bigr)x(s)=b(s),
+    \label{eq:fem-quadratic}
+\end{equation}
+其中
+\begin{align}
+    K_{mn} &=
+    \int_{\Omega_e}(\nabla\times N_n)\cdot\mu^{-1}(\nabla\times\overline{N_m})\,\dd V,\\
+    D_{mn} &=
+    \int_{\Omega_e}N_n\cdot\sigma_e\overline{N_m}\,\dd V,\\
+    M_{mn} &=
+    \int_{\Omega_e}N_n\cdot\varepsilon\overline{N_m}\,\dd V .
+\end{align}
+$A_{\Gamma}(s)$ 表示辐射边界、吸收边界、PML 或波端口所产生的频率相关边界项。若边界项在局部频带内解析，它可以与 $K+sD+s^2M$ 一起进入后续 Taylor 展开或有理近似。
+
+矩量法或混合位势积分方程也可得到同类模型。例如对电流基函数 $f_n$ 展开表面电流 $J_h=\sum_n i_n f_n$，常见阻抗矩阵可抽象写为
+\begin{equation}
+    Z(s)i(s)=v(s),
+    \label{eq:mom-system}
+\end{equation}
+其中 $Z_{mn}(s)$ 来自含有 Helmholtz Green 函数
+\[
+    G_k(r,r')=\frac{\exp(-\jj k|r-r'|)}{4\pi |r-r'|},
+    \qquad k=\omega\sqrt{\mu\varepsilon},
+\]
+的双重积分。只要选定中心频率附近没有材料分支点或系统奇点，$Z(s)$ 同样可看作 $s$ 的解析矩阵函数。因此，无论来自有限元、边界元还是矩量法，ALPS 都可从统一的参数系统 \eqref{eq:full-system} 出发。
+
+\section{中心频率展开与一阶线性化}
+
+取中心频率 $s_0=\jj\omega_0$，令
+\[
+    \sigma=s-s_0 .
+\]
+若系统已经是仿射形式
+\begin{equation}
+    A(s)=A_0+\sigma A_1,\qquad b(s)=b_0,
+    \label{eq:affine-system}
+\end{equation}
+则 ALPS 的核心推导最为直接。对于二次有限元系统 \eqref{eq:fem-quadratic}，也可以精确地转化为一阶仿射 pencil。将
+\[
+    K+sD+s^2M
+    =\widetilde K+\sigma\widetilde D+\sigma^2M
+\]
+其中
+\[
+    \widetilde K=K+s_0D+s_0^2M,\qquad
+    \widetilde D=D+2s_0M .
+\]
+引入增广未知量
+\[
+    z(\sigma)=
+    \begin{bmatrix}
+        x(\sigma)\\
+        \sigma x(\sigma)
+    \end{bmatrix},
+\]
+则二次系统等价于
+\begin{equation}
+    \left(
+    \underbrace{
+    \begin{bmatrix}
+        0&-I\\
+        \widetilde K&\widetilde D
+    \end{bmatrix}}_{\cA_0}
+    +\sigma
+    \underbrace{
+    \begin{bmatrix}
+        I&0\\
+        0&M
+    \end{bmatrix}}_{\cA_1}
+    \right)
+    \begin{bmatrix}
+        x\\
+        \sigma x
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        0\\
+        b
+    \end{bmatrix}.
+    \label{eq:quadratic-linearization}
+\end{equation}
+第一行给出 $\sigma x-\sigma x=0$，第二行正是
+$\widetilde Kx+\sigma\widetilde D x+\sigma^2Mx=b$。更高阶多项式矩阵
+\[
+    A(s_0+\sigma)=A_0+\sigma A_1+\cdots+\sigma^pA_p
+\]
+也可通过伴随线性化转化为一阶仿射形式，未知量为
+$[x,\sigma x,\ldots,\sigma^{p-1}x]^\transpose$。一般解析矩阵 $A(s)$ 可先在 $s_0$ 附近截断 Taylor 展开，再通过原始残差验证近似有效性。
+
+因此，后续只需研究标准形式
+\begin{equation}
+    (\cA_0+\sigma\cA_1)u(\sigma)=\cB,
+    \qquad
+    y(\sigma)=\cL^{\herm}u(\sigma),
+    \label{eq:standard-pencil}
+\end{equation}
+其中 $\cA_0$ 是中心频率处需要分解的大矩阵。若 $\cA_0$ 非奇异，则
+\begin{equation}
+    u(\sigma)
+    =
+    (\cA_0+\sigma\cA_1)^{-1}\cB
+    =
+    (I-\sigma\cH)^{-1}R,
+    \label{eq:resolvent}
+\end{equation}
+其中
+\begin{equation}
+    R=\cA_0^{-1}\cB,\qquad
+    \cH=-\cA_0^{-1}\cA_1 .
+    \label{eq:H-R-definition}
+\end{equation}
+式 \eqref{eq:resolvent} 说明：一次完整频点求解或分解 $\cA_0$ 后，局部频率响应变成了矩阵 resolvent 的有理逼近问题。
+
+\section{矩展开与 Padé 逼近}
+
+当 $|\sigma|$ 小于 resolvent 收敛半径时，
+\begin{equation}
+    (I-\sigma\cH)^{-1}
+    =
+    \sum_{n=0}^{\infty}\sigma^n\cH^n .
+\end{equation}
+于是单输入单输出响应
+\begin{equation}
+    h(\sigma)=\ell^{\herm}u(\sigma)
+\end{equation}
+具有幂级数展开
+\begin{equation}
+    h(\sigma)
+    =
+    \sum_{n=0}^{\infty}m_n\sigma^n,
+    \qquad
+    m_n=\ell^{\herm}\cH^n r,
+    \label{eq:moments}
+\end{equation}
+其中 $r=\cA_0^{-1}b$。$m_n$ 称为频率响应在中心点 $s_0$ 的矩。
+
+Padé 逼近用有理函数代替多项式 Taylor 截断。给定整数 $p,q$，寻找
+\begin{equation}
+    h_{[p/q]}(\sigma)
+    =
+    \frac{P_p(\sigma)}{Q_q(\sigma)}
+    =
+    \frac{a_0+a_1\sigma+\cdots+a_p\sigma^p}
+    {1+c_1\sigma+\cdots+c_q\sigma^q}
+    \label{eq:pade}
+\end{equation}
+使
+\begin{equation}
+    Q_q(\sigma)h(\sigma)-P_p(\sigma)
+    =\cO(\sigma^{p+q+1}).
+    \label{eq:pade-condition}
+\end{equation}
+将 $h(\sigma)=\sum_{n\ge0}m_n\sigma^n$ 代入，可得分母系数满足
+\begin{equation}
+    \sum_{i=0}^{q}c_i m_{n-i}=0,
+    \qquad
+    n=p+1,\ldots,p+q,
+    \qquad c_0=1,
+    \label{eq:pade-den}
+\end{equation}
+分子系数为
+\begin{equation}
+    a_n=\sum_{i=0}^{\min(n,q)}c_i m_{n-i},
+    \qquad n=0,\ldots,p .
+    \label{eq:pade-num}
+\end{equation}
+与 Taylor 多项式相比，Padé 逼近允许分母出现近似极点，因此在谐振、传输零点或缓慢衰减模态附近通常能用更低阶数描述更宽频带。
+
+直接使用 \eqref{eq:moments}--\eqref{eq:pade-num} 会遇到两个困难：一是高阶矩需要反复求解 $\cA_0$，二是矩序列容易严重病态。ALPS 的 ``Lanczos--Padé'' 部分正是用 Lanczos 投影隐式生成这些矩匹配条件。
+
+\section{Lanczos 投影产生 Padé 有理模型}
+
+先考虑单输入单输出情形。构造右 Krylov 子空间和左 Krylov 子空间
+\begin{align}
+    \cK_m(\cH,r)
+    &=\operatorname{span}\{r,\cH r,\ldots,\cH^{m-1}r\},\\
+    \cK_m(\cH^{\herm},\ell)
+    &=\operatorname{span}\{\ell,\cH^{\herm}\ell,\ldots,(\cH^{\herm})^{m-1}\ell\}.
+\end{align}
+双边 Lanczos 过程生成矩阵
+\[
+    V_m=[v_1,\ldots,v_m],\qquad
+    W_m=[w_1,\ldots,w_m],
+\]
+满足
+\begin{equation}
+    W_m^{\herm}V_m=I_m,\qquad
+    T_m=W_m^{\herm}\cH V_m ,
+    \label{eq:lanczos-proj}
+\end{equation}
+其中 $T_m$ 在无 breakdown 时为三对角矩阵。用 Petrov--Galerkin 条件近似
+\[
+    u_m(\sigma)=V_m z_m(\sigma),
+\]
+并要求残差对左空间正交：
+\[
+    W_m^{\herm}\bigl((I-\sigma\cH)V_mz_m-R\bigr)=0 .
+\]
+由此得到低阶系统
+\begin{equation}
+    (I_m-\sigma T_m)z_m(\sigma)=W_m^{\herm}R .
+    \label{eq:reduced-system}
+\end{equation}
+响应近似为
+\begin{equation}
+    h_m(\sigma)
+    =
+    \ell^{\herm}V_m
+    (I_m-\sigma T_m)^{-1}
+    W_m^{\herm}r .
+    \label{eq:lanczos-pade-response}
+\end{equation}
+若起始向量按 $r=\beta v_1$、$\ell=\eta w_1$ 归一化，则
+\begin{equation}
+    h_m(\sigma)
+    =
+    \eta^*\beta\,
+    e_1^{\transpose}
+    (I_m-\sigma T_m)^{-1}
+    e_1 .
+    \label{eq:scalar-lanczos-pade}
+\end{equation}
+式 \eqref{eq:scalar-lanczos-pade} 已经是一个分母为
+\[
+    Q_m(\sigma)=\det(I_m-\sigma T_m)
+\]
+的有理函数；其极点由 $T_m$ 的 Ritz 值决定，即
+\[
+    \sigma_k\approx\lambda_k(T_m)^{-1},
+    \qquad
+    s_k\approx s_0+\lambda_k(T_m)^{-1}.
+\]
+这些极点近似原始电磁系统在中心点附近的谐振或自然模态。
+
+Lanczos--Padé 的关键矩匹配性质可以写成
+\begin{equation}
+    \ell^{\herm}\cH^n r
+    =
+    \ell^{\herm}V_mT_m^nW_m^{\herm}r,
+    \qquad
+    n=0,1,\ldots,2m-1,
+    \label{eq:moment-matching}
+\end{equation}
+在无 breakdown 且双正交条件保持良好时成立。将 \eqref{eq:lanczos-pade-response} 展开为
+\[
+    h_m(\sigma)
+    =
+    \sum_{n=0}^{\infty}
+    \ell^{\herm}V_mT_m^nW_m^{\herm}r\,\sigma^n,
+\]
+再与 \eqref{eq:moments} 比较，可知
+\begin{equation}
+    h(\sigma)-h_m(\sigma)=\cO(\sigma^{2m}).
+\end{equation}
+因此 $m$ 步双边 Lanczos 给出的低阶模型等价于一个典型的 $[m-1/m]$ Padé 逼近，但避免显式计算高阶矩和求解病态 Hankel 方程。
+
+\section{多端口与矩阵有理模型}
+
+电磁器件常有多个端口或多个激励。设
+\[
+    (\cA_0+\sigma\cA_1)U(\sigma)=\cB,\qquad
+    Y(\sigma)=\cL^{\herm}U(\sigma),
+\]
+其中 $\cB\in\CC^{N\times n_i}$，$\cL\in\CC^{N\times n_o}$。由 \eqref{eq:H-R-definition} 得
+\begin{equation}
+    Y(\sigma)
+    =
+    \cL^{\herm}(I-\sigma\cH)^{-1}R,
+    \qquad R=\cA_0^{-1}\cB .
+\end{equation}
+块 Lanczos 构造
+\[
+    \operatorname{range}(V_m)
+    =
+    \cK_m(\cH,R),
+    \qquad
+    \operatorname{range}(W_m)
+    =
+    \cK_m(\cH^{\herm},\cL),
+\]
+并保持 $W_m^{\herm}V_m=I$。于是矩阵响应的低阶模型为
+\begin{equation}
+    Y_m(\sigma)
+    =
+    \cL^{\herm}V_m
+    (I-\sigma T_m)^{-1}
+    W_m^{\herm}R,
+    \qquad
+    T_m=W_m^{\herm}\cH V_m .
+    \label{eq:block-rom}
+\end{equation}
+该模型同时匹配多个输入输出通道的块矩
+\[
+    M_n=\cL^{\herm}\cH^nR .
+\]
+实际软件中常以端口电压、电流或功率波作为输入输出，先得到阻抗矩阵 $Z_m(s)$ 或导纳矩阵 $Y_m(s)$，再转换为散射矩阵。例如对参考阻抗矩阵 $Z_0$，
+\begin{equation}
+    S_m(s)
+    =
+    \bigl(Z_m(s)-Z_0\bigr)
+    \bigl(Z_m(s)+Z_0\bigr)^{-1},
+    \label{eq:s-param}
+\end{equation}
+或使用相应的功率归一化形式。由于 $Z_m(s)$ 是低阶有理矩阵，$S_m(s)$ 也是可快速求值的矩阵有理函数。
+
+\section{自适应扫频策略}
+
+单个中心频率的 Padé 模型只在某个邻域内可靠。ALPS 的 ``Adaptive'' 部分就是自动选择中心频率、模型阶数和有效频带。给定误差容限 $\tau$，可定义原始方程残差指标
+\begin{equation}
+    \varepsilon_A(s)
+    =
+    \frac{\|b(s)-A(s)x_m(s)\|_2}
+         {\|b(s)\|_2+\|A(s)\|_2\|x_m(s)\|_2},
+    \label{eq:residual-error}
+\end{equation}
+以及响应收敛指标
+\begin{equation}
+    \varepsilon_Y(s)
+    =
+    \frac{\|Y_m(s)-Y_{m-\Delta m}(s)\|_F}
+         {\|Y_m(s)\|_F+\epsilon_{\mathrm{mach}}}.
+    \label{eq:response-error}
+\end{equation}
+若 $A(s)$ 非奇异，则残差给出误差关系
+\begin{equation}
+    x(s)-x_m(s)=A(s)^{-1}\bigl(b(s)-A(s)x_m(s)\bigr),
+\end{equation}
+从而
+\begin{equation}
+    \frac{\|x(s)-x_m(s)\|_2}{\|x(s)\|_2}
+    \le
+    \kappa_2(A(s))
+    \frac{\|b(s)-A(s)x_m(s)\|_2}{\|b(s)\|_2},
+    \label{eq:error-bound}
+\end{equation}
+其中 $\kappa_2(A)$ 为二范数条件数。靠近谐振或传输零点时 $\kappa_2(A)$ 可能很大，因此通常同时使用残差、响应变化和采样点校验。
+
+围绕中心 $\omega_c$ 的有效半径可定义为
+\begin{equation}
+    \rho_c
+    =
+    \sup\left\{\rho>0:
+    \max_{\omega\in[\omega_c-\rho,\omega_c+\rho]\cap\Omega}
+    \max(\varepsilon_A(\jj\omega),\varepsilon_Y(\jj\omega))
+    \le\tau
+    \right\}.
+    \label{eq:valid-radius}
+\end{equation}
+实际算法可描述如下：
+\begin{enumerate}
+    \item 选取尚未覆盖频段中的中心频率 $\omega_c$，装配并分解 $\cA_0=\cA(s_c)$。
+    \item 用 $\cA_0^{-1}$ 作为线性求解器，执行 $m$ 步 Lanczos 或块 Lanczos，得到 $T_m,V_m,W_m$。
+    \item 在候选采样点上计算低阶模型 \eqref{eq:block-rom}，并评估 \eqref{eq:residual-error}--\eqref{eq:response-error}。
+    \item 若误差满足容限，则接受由 \eqref{eq:valid-radius} 给出的局部频带；若不满足，则增加 $m$ 或缩小局部频带。
+    \item 对未覆盖的频段重复上述过程，直到 $\Omega$ 被若干重叠局部模型覆盖。
+\end{enumerate}
+最终扫频结果可表示为
+\begin{equation}
+    Y_{\mathrm{ALPS}}(s)=Y_{m_k}^{(k)}(s),
+    \qquad
+    s\in \cI_k,
+\end{equation}
+其中 $\{\cI_k\}$ 为各中心频率模型的有效子区间。若多个区间重叠，常选择离当前频率最近的中心模型，或用残差较小的模型。
+
+\section{与 AWE 和直接扫频的关系}
+
+渐近波形估计（AWE）同样从中心频率的矩展开出发，但通常显式计算矩并求解 Padé 系数方程。ALPS 可看作 AWE 的 Krylov/Lanczos 稳定化版本：
+\begin{itemize}
+    \item 直接扫频：每个频点求解一次全阶系统，鲁棒但昂贵。
+    \item AWE：在中心点计算矩并构造 Padé 模型，频点求值便宜，但高阶矩容易病态。
+    \item ALPS：用 Lanczos 子空间隐式实现 Padé 矩匹配，并用自适应中心覆盖宽频段。
+\end{itemize}
+因此，ALPS 的数学本质不是改变 Maxwell 方程，而是对离散后的频率参数线性系统进行局部有理降阶。
+
+\section{适用条件与数值注意事项}
+
+\begin{enumerate}
+    \item \textbf{解析性。} 在每个中心频率邻域内，$A(s)$、$b(s)$ 和输出算子应为解析或可由低阶解析模型近似。材料强色散、模式截止点和非光滑端口模型会缩小有效半径。
+    \item \textbf{非奇异性。} 中心矩阵 $\cA_0$ 必须可分解。若中心点过于接近自然谐振，Lanczos 模型可能需要更高阶数，残差也会放大。
+    \item \textbf{双正交稳定性。} 双边 Lanczos 可能出现 breakdown 或双正交性丢失。工程实现通常需要再正交、块 Lanczos、look-ahead Lanczos 或 Arnoldi 变体。
+    \item \textbf{被动性。} 对无源电磁网络，物理极点应满足稳定性要求。数值降阶可能产生轻微非被动性，必要时需做被动性检查或修正。
+    \item \textbf{误差验证。} Padé 模型阶数较低时外推很快，但不能无限延伸。自适应分段和原始方程残差是宽频可靠性的关键。
+\end{enumerate}
+
+\section{结论}
+
+ALPS 快速扫频的核心数学模型可以概括为
+\[
+    A(s)x(s)=b(s)
+    \quad\Longrightarrow\quad
+    u(\sigma)=(I-\sigma\cH)^{-1}R
+    \quad\Longrightarrow\quad
+    y_m(\sigma)=
+    \cL^{\herm}V_m(I-\sigma T_m)^{-1}W_m^{\herm}R .
+\]
+其中第一步来自 Maxwell 方程离散化，第二步来自中心频率处的一阶线性化和矩阵分解，第三步来自 Lanczos Krylov 投影。由于 $y_m$ 是 Padé 型有理函数，它能以少量自由度表示谐振电磁响应；由于有效频带由残差和响应收敛自适应决定，它又能覆盖宽频扫频任务。这就是 ALPS 相比逐点求解能够显著减少完整电磁求解次数的根本原因。
+
+\begin{thebibliography}{9}
+
+\bibitem{feldmann1995}
+P. Feldmann and R. W. Freund,
+``Efficient linear circuit analysis by Padé approximation via the Lanczos process,''
+\emph{IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems},
+vol. 14, no. 5, pp. 639--649, 1995.
+\url{https://doi.org/10.1109/43.384428}
+
+\bibitem{bai2001}
+Z. Bai and R. W. Freund,
+``A partial Padé-via-Lanczos method for reduced-order modeling,''
+\emph{Linear Algebra and its Applications},
+vol. 332--334, pp. 139--164, 2001.
+\url{https://doi.org/10.1016/S0024-3795(00)00291-3}
+
+\bibitem{bracken1999}
+J. E. Bracken, D.-K. Sun, and Z. J. Cendes,
+``Characterization of electromagnetic devices via reduced-order models,''
+\emph{Computer Methods in Applied Mechanics and Engineering},
+vol. 169, no. 3--4, pp. 311--330, 1999.
+\url{https://doi.org/10.1016/S0045-7825(98)00160-1}
+
+\bibitem{baker1996}
+G. A. Baker and P. Graves-Morris,
+\emph{Padé Approximants},
+2nd ed., Cambridge University Press, 1996.
+
+\bibitem{ansys-fast-sweep}
+Ansys HFSS documentation,
+``Fast Frequency Sweeps,''
+accessed 2026.
+\url{https://ansyshelp.ansys.com/public/Views/Secured/Electronics/v251/en/Subsystems/HFSS/Content/HFSS/FastFrequencySweeps.htm}
+
+\end{thebibliography}
+
+\end{document}

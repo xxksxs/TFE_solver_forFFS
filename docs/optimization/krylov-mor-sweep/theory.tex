@@ -1,0 +1,533 @@
+% !TEX program = pdflatex
+% Theory document for the Krylov-subspace Model-Order Reduction (MOR) fast
+% frequency sweep module of the BP-FEM solver. Self-contained; compile with
+% `pdflatex theory.tex`.
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\im}{\mathrm{i}}
+\DeclareMathOperator{\range}{range}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Real}{Re}
+\DeclareMathOperator{\Imag}{Im}
+\DeclareMathOperator{\spanop}{span}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\title{Krylov-Subspace Model-Order Reduction \\ for Fast Frequency Sweeps in the BP-FEM Solver}
+\author{BP-FEM Optimization Track}
+\date{Draft for review}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+%---------------------------------------------------------------
+\section{Scope}
+
+This document specifies the mathematical foundation of the Krylov-subspace
+Model-Order Reduction (MOR) module to be added to the BP-FEM solver as a
+\emph{fast frequency sweep} option, alongside the existing point-by-point
+direct solver and the BiCGStab fallback. The goal is to reduce a sweep of
+$N_f$ frequency points over a band of interest from $\mathcal{O}(N_f)$
+factorizations of the full system to a single (or few) factorization(s)
+plus $\mathcal{O}(N_f)$ evaluations on a reduced model whose dimension is
+two orders of magnitude smaller.
+
+The document is intentionally implementation-aware: every symbol below has
+a matching counterpart in the existing C++ source tree
+(\texttt{FEMAssembler}, \texttt{PortModeSolver},
+\texttt{MklPardisoSolver}, \texttt{ResultExtractor}, \texttt{SparseMatrix}).
+Where convenient, source-level names are noted in
+\textcolor{gray}{gray} comments such as
+\textcolor{gray}{\texttt{// FEMAssembler::assemble}}.
+
+%---------------------------------------------------------------
+\section{Continuous problem and FE discretization}
+
+\subsection{Strong form}
+
+We solve the time-harmonic curl--curl problem in a bounded Lipschitz
+domain $\Omega \subset \R^3$ partitioned into wave-port faces
+$\{\Gamma_p\}_{p=1}^{N_p}$ and a perfect electric conductor (PEC) wall
+$\Gamma_{\mathrm{PEC}}$ with $\partial\Omega = \Gamma_{\mathrm{PEC}}\cup
+\bigcup_p \Gamma_p$. The time convention is $\mathrm{e}^{+\im\omega t}$.
+For an angular frequency $\omega = 2\pi f$ the electric field
+$\bm E(\bm r,\omega) \in H(\mathrm{curl};\Omega)$ satisfies
+\begin{align}
+  \nabla\times\!\big(\mu_r^{-1}\nabla\times\bm E\big)
+  -k_0^2\,\varepsilon_c(\omega)\,\bm E
+  &= \bm 0
+  & &\text{in } \Omega,\label{eq:strong}\\
+  \hat{\bm n}\times\bm E &= \bm 0
+  & &\text{on } \Gamma_{\mathrm{PEC}},\\
+  \hat{\bm n}\times\!\big(\mu_r^{-1}\nabla\times\bm E\big)
+  &= \mathcal B_p(\bm E;\omega) + \bm g_p(\omega)
+  & &\text{on } \Gamma_p,
+\end{align}
+where $k_0 = \omega/c_0$, $c_0$ is the vacuum speed of light, and
+$\varepsilon_c(\omega) = \varepsilon_r - \im\sigma/(\omega\varepsilon_0)$
+encodes optional volumetric losses
+\textcolor{gray}{(\texttt{FEMAssembler::assemble})}.
+
+\subsection{Wave-port boundary form}
+
+Each port $\Gamma_p$ admits a numerically computed dominant transverse
+mode $\bm e_p^{(t)}: \Gamma_p \to \R^3$ with cutoff wavenumber
+$k_{c,p}$ and propagation constant
+\(
+  \beta_p(\omega) = \sqrt{k_0^2 - k_{c,p}^2}
+\),
+absorbing the propagating mode and exciting the projector
+\(
+  \bm g_p = -2\,\im\beta_p\,a_p^{\mathrm{inc}}\,(\hat{\bm n}\times\bm e_p^{(t)})
+\)
+where $a_p^{\mathrm{inc}}$ is the complex amplitude of the incident wave
+in $\sqrt{\mathrm{W}}$ units. The L\textsuperscript{2}-shape of
+$\bm e_p^{(t)}$ is normalized to
+$\int_{\Gamma_p} |\bm e_p^{(t)}|^2\,\mathrm dS = 1$
+and the power normalization $s_p(\omega)$ is supplied by
+\textcolor{gray}{\texttt{powerNormalizationFactor}}:
+\begin{equation}
+  s_p(\omega) = \frac{1}{\sqrt{P_p^{\mathrm{unit}}(\omega)}}, \qquad
+  P_p^{\mathrm{unit}}(\omega) = \frac{\beta_p(\omega)}{2\omega\mu_0}
+  \int_{\Gamma_p}|\bm e_p^{(t)}|^2\,\mathrm dS.
+  \label{eq:powernorm}
+\end{equation}
+With this normalization the incident amplitude carried by the right-hand
+side becomes $\sqrt{P_p^{\mathrm W}}\,s_p(\omega)$ where
+$P_p^{\mathrm W}$ is the requested incident power
+\textcolor{gray}{(\texttt{PortDefinition::magnitudeW})}.
+
+\subsection{Galerkin discretization}
+
+Let $V_h\subset H(\mathrm{curl};\Omega)$ be the finite-element subspace
+spanned by H(curl)-conforming Nedelec/Whitney edge elements
+(0\textsuperscript{th} or 1\textsuperscript{st}-order hierarchical;
+\textcolor{gray}{\texttt{EdgeTopology}}). Denote the global degree-of-freedom
+vector $\bm x(\omega)\in\C^{n}$. The discrete bilinear forms and load
+vector at frequency $\omega$ read
+\begin{align}
+  \bm K_{ij} &= \int_\Omega \mu_r^{-1}\,(\nabla\times\bm w_i)\cdot
+                 (\nabla\times\bm w_j)\,\mathrm dV,
+  & \text{[stiffness]}\\
+  \bm M_{ij} &= \int_\Omega \varepsilon_c(\omega)\,\bm w_i\cdot\bm w_j\,\mathrm dV,
+  & \text{[mass; weakly $\omega$-dependent if $\sigma\!\neq\!0$]}\\
+  \bm m_p    &= \int_{\Gamma_p}(\hat{\bm n}\times\bm e_p^{(t)})\cdot\bm w_i\,\mathrm dS,
+  & \text{[port projector / coupling vector]}\\
+  \bm f(\omega) &= \sum_{p=1}^{N_p} 2\,\im\beta_p(\omega)\,\sqrt{P_p^{\mathrm W}}\,s_p(\omega)\,\delta_p^{\mathrm{exc}}\,\bm m_p,
+  & \text{[wave-port RHS]}
+\end{align}
+which assemble into the discrete system
+\begin{equation}
+  \boxed{\;
+  \bm A(\omega)\,\bm x(\omega) = \bm f(\omega),\qquad
+  \bm A(\omega) = \bm K - k_0^2\,\bm M
+  + \im\sum_{p=1}^{N_p} \beta_p(\omega)\,\bm m_p \bm m_p^{\!\top}.
+  \;}
+  \label{eq:discrete}
+\end{equation}
+Equation~\eqref{eq:discrete} is the \emph{exact} system the existing
+solver assembles per frequency
+\textcolor{gray}{(\texttt{FEMAssembler::assemble} for $\bm K,\bm M,\bm m_p$;
+\texttt{applyWavePorts} for the rank-one port term).}
+The S-parameter postprocessor recovers
+\begin{equation}
+  b_p(\omega) = \frac{\bm m_p^{\!\top}\,\bm x(\omega)}{s_p(\omega)},
+  \qquad
+  S_{pq}(\omega) = \frac{b_p(\omega)-a_p^{\mathrm{inc}}\,\delta_{pq}}{a_q^{\mathrm{inc}}}
+  \quad\text{(for unit excitation $a_q^{\mathrm{inc}}=1$).}
+  \label{eq:sparam}
+\end{equation}
+
+\begin{remark}[Why this form is MOR-friendly]
+The system $\bm A(\omega)$ in~\eqref{eq:discrete} is a low-order
+\emph{rational matrix function} of $\omega$:
+\begin{itemize}
+  \item $\bm K - k_0^2\bm M$ is a polynomial of degree~2 in $k_0$, hence in
+        $\omega$, modulo a possibly weak $\omega$-dependence of
+        $\varepsilon_c$ that is exactly handled by the model
+        in~\S\ref{sec:dispersion}.
+  \item Each port term $\im\beta_p(\omega)\bm m_p\bm m_p^{\!\top}$ is a
+        rank-one update with frequency dependence concentrated in the scalar
+        $\beta_p(\omega)=\sqrt{k_0^2-k_{c,p}^2}$.
+\end{itemize}
+This structure is what allows a Krylov subspace built once at one (or a
+few) expansion points to capture the entire transfer function~$S(\omega)$.
+\end{remark}
+
+%---------------------------------------------------------------
+\section{Linear time-invariant transfer model}
+
+\subsection{State-space embedding}
+
+To keep the algebra clean we treat $k_0^2$ (or, for second-order moment
+matching, $\omega$) as the expansion parameter and write the parametric
+system in descriptor form
+\begin{equation}
+  \big[\bm K - k_0^2\,\bm M + \im\sum_p \beta_p(\omega)\,\bm m_p\bm m_p^{\!\top}\big]\,
+  \bm x = \bm B\,\bm u,
+  \qquad \bm y = \bm C\,\bm x,
+  \label{eq:lti}
+\end{equation}
+with input matrix $\bm B = [2\im\beta_1 s_1 \bm m_1\;\cdots\;2\im\beta_{N_p} s_{N_p}\bm m_{N_p}]$,
+input vector $\bm u\in\C^{N_p}$ holding the per-port incident amplitudes,
+and output matrix $\bm C = [\bm m_1\;\cdots\;\bm m_{N_p}]^{\!\top}/\diag(s_p)$.
+The transfer function of interest is
+\begin{equation}
+  \bm H(\omega) = \bm C\,\bm A(\omega)^{-1}\bm B \in \C^{N_p\times N_p},
+\end{equation}
+whose $(p,q)$ entry is precisely $b_p/a_q^{\mathrm{inc}}$ from
+\eqref{eq:sparam} up to a known additive identity for the reflection
+diagonal.
+
+\subsection{Two MOR formulations}
+
+We support two formulations because they offer different tradeoffs and
+the choice is not premature optimization:
+
+\paragraph{Form A --- single-point ``shifted-and-inverted'' Krylov.}
+Pick an expansion point $\omega_0$ (band-center). Define the shifted
+operator
+\(
+  \bm A_0 = \bm A(\omega_0).
+\)
+The Krylov subspace
+\begin{equation}
+  \mathcal{K}_q(\bm A_0^{-1}\bm M,\,\bm A_0^{-1}\bm B)
+  = \spanop\!\big\{\bm A_0^{-1}\bm B,\ (\bm A_0^{-1}\bm M)\bm A_0^{-1}\bm B,\ \ldots,
+                    (\bm A_0^{-1}\bm M)^{q-1}\bm A_0^{-1}\bm B\big\}
+  \label{eq:krylov-singlepoint}
+\end{equation}
+matches $2q$ moments of $\bm H$ around $\omega_0$ (block Arnoldi version,
+PRIMA-style).
+
+\paragraph{Form B --- multi-point (rational) Krylov.}
+Choose a small set of expansion points
+$\{\omega_0^{(1)},\dots,\omega_0^{(L)}\}$ inside the sweep band. For each
+expansion point factorize $\bm A_0^{(\ell)}$ once and append
+$q_\ell$ columns of the corresponding shift-and-invert Krylov subspace.
+The union spans a rational Krylov subspace that matches moments at every
+expansion point and is far more accurate over wide bands than Form~A.
+
+Both forms project $\bm A(\omega)$ onto the subspace $\bm V$ to produce
+the reduced model
+\begin{equation}
+  \widetilde{\bm A}(\omega) = \bm V^{\!*}\bm A(\omega)\bm V,\qquad
+  \widetilde{\bm B} = \bm V^{\!*}\bm B,\qquad
+  \widetilde{\bm C} = \bm C\,\bm V,
+\end{equation}
+yielding the order-$q$ reduced transfer function
+$\widetilde{\bm H}(\omega) = \widetilde{\bm C}\,\widetilde{\bm A}(\omega)^{-1}\widetilde{\bm B}$.
+
+\begin{theorem}[Moment-matching, single-point form]
+Let $\bm V\in\C^{n\times q}$ be an orthonormal basis of
+$\mathcal{K}_q(\bm A_0^{-1}\bm M,\bm A_0^{-1}\bm B)$. The Galerkin-type
+reduced model with $\widetilde{\bm A}(\omega) = \bm V^{\!*}\bm A(\omega)\bm V$
+matches the first $2q$ moments of the original transfer function
+$\bm H(\omega)$ around $\omega_0$ (Grimme's theorem). In particular,
+\(
+  \tilde H_{pq}^{(k)}(\omega_0) = H_{pq}^{(k)}(\omega_0)
+\)
+for all $k=0,1,\dots,2q-1$ and $p,q$.
+\end{theorem}
+
+\begin{remark}[Symmetry preservation]
+$\bm K,\bm M$ are real symmetric and $\bm m_p\bm m_p^{\!\top}$ are SPSD
+in this assembly. With Galerkin projection ($\bm V^{\!*}$ on the left,
+$\bm V$ on the right) and $\bm V$ orthonormal, the reduced system retains
+the same complex-symmetric structure, so the reduced $\widetilde{\bm A}$
+is a tiny dense complex-symmetric matrix solvable by LDL\textsuperscript{T}
+in $\mathcal{O}(q^3)$.
+\end{remark}
+
+\subsection{Frequency-dependent material model}\label{sec:dispersion}
+
+Let $\varepsilon_c(\omega)$ be a rational function of $\omega$. The
+generic bilinear-form parametric expansion is
+\begin{equation}
+  \bm A(\omega) = \bm K + \sum_{i=0}^{N_a} \alpha_i(\omega)\,\bm A_i,\qquad
+  \alpha_i(\omega)\in\{\,1,\;k_0^2,\;\im k_0,\;\im\beta_p(\omega),\ldots\,\}.
+\end{equation}
+Each $\bm A_i$ is assembled \emph{once} during the offline phase and
+stored in CSR alongside the existing
+\textcolor{gray}{\texttt{SparsePattern}} cache. The reduced operator becomes
+\begin{equation}
+  \widetilde{\bm A}(\omega) = \bm V^{\!*}\bm K\bm V + \sum_i \alpha_i(\omega)\,
+                              \bm V^{\!*}\bm A_i\bm V,
+\end{equation}
+so the online cost per frequency is $\mathcal{O}(N_a q^2)$ assembly plus
+$\mathcal{O}(q^3)$ solve, independent of the full DOF count $n$.
+
+%---------------------------------------------------------------
+\section{Algorithms}
+
+\subsection{Block-Arnoldi for single-point form}
+
+\begin{algorithm}[h]
+\caption{Block-Arnoldi (single-point Krylov MOR)}
+\label{alg:block-arnoldi}
+\begin{algorithmic}[1]
+\Require expansion point $\omega_0$, max moments $q$, residual tolerance $\tau$
+\Statex Operators: $\bm K$, $\bm M$, $\bm B$, $\bm C$ already assembled
+\State Form $\bm A_0 \gets \bm A(\omega_0)$ and factorize once via PARDISO
+\Comment{\textcolor{gray}{\texttt{MklPardisoSolver}: re-use symbolic factorization across frequencies for the reduction phase}}
+\State $\bm V_1 \gets \mathrm{orth}(\bm A_0^{-1} \bm B)$
+\For{$j = 1,\dots,q$}
+  \State $\bm W \gets \bm A_0^{-1}\,\bm M\,\bm V_j$
+  \For{$i = 1,\dots,j$}
+    \State $\bm H_{ij}\gets \bm V_i^{\!*}\bm W$,\quad $\bm W\gets \bm W - \bm V_i\,\bm H_{ij}$ \Comment{Modified Gram-Schmidt}
+  \EndFor
+  \State (Re-orthogonalize $\bm W$ against $\bm V_{1:j}$ if needed.)
+  \State $\bm V_{j+1} \gets \mathrm{orth}(\bm W)$;\quad break if $\|\bm W\| < \tau\|\bm V_1\|$
+\EndFor
+\State $\bm V \gets [\bm V_1,\bm V_2,\ldots]$
+\State Build reduced matrices: $\widetilde{\bm K}\!=\!\bm V^{\!*}\bm K\bm V$, $\widetilde{\bm M}\!=\!\bm V^{\!*}\bm M\bm V$, $\widetilde{\bm m}_p\!=\!\bm V^{\!*}\bm m_p$
+\State \Return $\bm V$, $\widetilde{\bm K}$, $\widetilde{\bm M}$, $\{\widetilde{\bm m}_p\}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Multi-point (rational) Krylov}
+
+\begin{algorithm}[h]
+\caption{Adaptive rational Krylov MOR sweep}
+\label{alg:rational-krylov}
+\begin{algorithmic}[1]
+\Require sweep band $[\omega_a,\omega_b]$, target tolerance $\varepsilon_S$, max ROM order $q_{\max}$
+\State Pick initial expansion points $\Sigma_0$ (e.g.\ $\{\omega_a,\omega_m,\omega_b\}$)
+\State $\bm V \gets [\,]$
+\For{each $\omega_0^{(\ell)} \in \Sigma_0$}
+  \State Factorize $\bm A_0^{(\ell)} = \bm A(\omega_0^{(\ell)})$
+  \State Run Algorithm~\ref{alg:block-arnoldi} for $q_\ell$ steps; append columns to $\bm V$
+\EndFor
+\State Orthonormalize $\bm V$ globally; build reduced operators
+\Repeat
+  \State Evaluate $\widetilde{\bm H}(\omega)$ on a probe set $\Omega_p\subset[\omega_a,\omega_b]$
+  \State Compute residual indicator $\rho(\omega)$ from \S\ref{sec:residual}
+  \State $\omega^\star \gets \arg\max_{\omega\in\Omega_p}\rho(\omega)$
+  \If{$\rho(\omega^\star) > \varepsilon_S$ and $\dim\bm V < q_{\max}$}
+    \State Factorize $\bm A(\omega^\star)$, append Krylov block, re-orthonormalize
+  \EndIf
+\Until{$\rho(\omega^\star) \le \varepsilon_S$ or budget exhausted}
+\State \Return $\bm V$ and reduced operators
+\end{algorithmic}
+\end{algorithm}
+
+%---------------------------------------------------------------
+\section{Error and stability indicators}\label{sec:residual}
+
+We expose three indicators; the user-facing tolerance is on (R3) but
+(R1) and (R2) are essential for diagnostics.
+
+\paragraph{(R1) Algebraic residual.} For an evaluated frequency the relative
+residual of the reduced solution lifted back to the full space is
+\begin{equation}
+  \rho_{\mathrm{alg}}(\omega) =
+  \frac{\|\bm A(\omega)\,\bm V\,\widetilde{\bm x}(\omega) - \bm f(\omega)\|_2}
+       {\|\bm f(\omega)\|_2}.
+\end{equation}
+If~$\rho_{\mathrm{alg}}$ explodes the basis is too small or the expansion
+point is poorly placed. This indicator requires only one SpMV with the
+full system, no factorization.
+
+\paragraph{(R2) Heuristic moment residual.} Fully embedded in the ROM:
+\begin{equation}
+  \rho_{\mathrm{mom}}(\omega) =
+  \|\widetilde{\bm A}(\omega)\,\widetilde{\bm x}(\omega) - \widetilde{\bm B}\,\bm u\|_2
+  / \|\widetilde{\bm B}\,\bm u\|_2.
+\end{equation}
+This is essentially a self-consistency check on the reduced linear solve;
+useful for catching condition-number blowup of $\widetilde{\bm A}$.
+
+\paragraph{(R3) S-parameter discrepancy at validation points.}
+Pick a small validation set $\Omega_v\subset[\omega_a,\omega_b]$ and run the
+existing direct solver. Define
+\begin{equation}
+  \rho_S = \max_{\omega\in\Omega_v} \big\|\widetilde{\bm S}(\omega)-\bm S(\omega)\big\|_F,
+\end{equation}
+which is the user contract: the ROM output must agree with the exact
+solver to within $\rho_S \le \varepsilon_S$ (default 0.01 dB on every
+$|S|$).
+
+%---------------------------------------------------------------
+\section{Output reconstruction}
+
+\subsection{S-parameter evaluation}
+
+For each requested $\omega$:
+\begin{enumerate}
+  \item Solve the dense reduced system
+        $\widetilde{\bm A}(\omega)\,\widetilde{\bm x}(\omega) = \widetilde{\bm B}\,\bm u$
+        with the (cached) LDL\textsuperscript{T} of $\widetilde{\bm A}(\omega)$.
+  \item Form $\bm y(\omega) = \widetilde{\bm C}\,\widetilde{\bm x}(\omega)$.
+  \item Apply the existing power normalization
+        $b_p = y_p$ (already divided by $s_p$ inside $\widetilde{\bm C}$).
+  \item Compute $S_{pq}$ exactly as in~\eqref{eq:sparam}.
+\end{enumerate}
+
+\subsection{Field reconstruction}
+
+When a full-space field is requested at $\omega$:
+\begin{equation}
+  \bm x(\omega) \approx \bm V\,\widetilde{\bm x}(\omega).
+\end{equation}
+The reduced model thus also provides VTU output at any sweep point at
+post-projection cost $\mathcal{O}(nq)$. Memory permitting, only requested
+frequencies need lifting; the default flag stays
+\texttt{--no-write-all-fields} to keep disk usage bounded.
+
+%---------------------------------------------------------------
+\section{Cost model}
+
+Let $n$ = full DOFs, $q$ = ROM dimension, $N_f$ = sweep points,
+$N_v$ = validation points, $L$ = expansion points,
+$T_{\mathrm{LU}}(n)$ = PARDISO factorization cost,
+$T_{\mathrm{solve}}(n)$ = single triangular solve cost, $N_p$ = port count.
+
+\begin{table}[h]
+\centering
+\caption{Asymptotic cost comparison for a sweep of $N_f$ points.}
+\begin{tabular}{lll}
+\toprule
+Phase & Direct sweep & Krylov MOR sweep \\
+\midrule
+Assembly & $N_f \cdot T_{\mathrm{asm}}(n)$ & $L \cdot T_{\mathrm{asm}}(n)$ + cached subforms\\
+Factorization & $N_f \cdot T_{\mathrm{LU}}(n)$ & $L \cdot T_{\mathrm{LU}}(n)$\\
+Solve / Krylov build & $N_f \cdot N_p \cdot T_{\mathrm{solve}}(n)$ & $L\cdot q \cdot N_p \cdot T_{\mathrm{solve}}(n)$\\
+Per-frequency online & 0 & $\mathcal{O}(N_a q^2 + q^3)$\\
+Validation & 0 & $N_v \cdot T_{\mathrm{LU}}(n)$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For the BP-filter benchmark used throughout this project ($n\!\approx\!2.9\!\times\!10^5$
+order-1 DOFs, $N_f=401$, $L=2{-}3$, $q=30{-}60$,
+$N_v\!\sim\!5$): the speedup factor is
+\(
+  N_f / (L + N_v) \sim 401 / 8 \approx 50,
+\)
+i.e.\ a $\sim$\!50$\times$ wall-clock reduction is realistic before any
+parallelization.
+
+%---------------------------------------------------------------
+\section{Numerical safeguards}
+
+\begin{itemize}
+\item \textbf{Re-orthogonalization}. Modified Gram-Schmidt with one or two
+      reorthogonalization passes; switch to Householder if loss of
+      orthogonality exceeds $10^{-10}$.
+\item \textbf{Deflation}. Drop columns whose norm after orthogonalization
+      drops below $10^{-12}$; report deflation events.
+\item \textbf{Conditioning}. Monitor $\|\widetilde{\bm A}^{-1}\|/\|\widetilde{\bm A}\|$ via
+      LDL\textsuperscript{T} pivot magnitudes. Trigger an additional
+      expansion point if conditioning exceeds $10^{12}$.
+\item \textbf{Cutoff handling}. Below the lowest-order port cutoff
+      $k_0 < k_{c,p}$, $\beta_p$ becomes imaginary and $s_p\to 0$. The
+      reduced model must extend continuously by analytic continuation; we
+      keep $\beta_p$ in the symbolic form $\sqrt{k_0^2 - k_{c,p}^2}$ and
+      branch-cut on the principal sqrt. The behavior is identical to the
+      existing direct solver (\texttt{powerNormalizationFactor} returns
+      0).
+\item \textbf{Symmetry recovery}. If round-off perturbs symmetry,
+      symmetrize $\widetilde{\bm K}\!\gets\!\tfrac12(\widetilde{\bm K}+\widetilde{\bm K}^{\!\top})$
+      explicitly after construction.
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{Mapping to existing code}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.36\linewidth}p{0.6\linewidth}}
+\toprule
+Mathematical object & Source location \\
+\midrule
+$\bm K - k_0^2\bm M$ & \texttt{src/fem/FEMAssembler.cpp::assemble} (volume part)\\
+$\im\beta_p\bm m_p\bm m_p^{\!\top}$ & \texttt{src/fem/FEMAssembler.cpp::applyWavePorts}\\
+$\bm m_p$ (output) & \texttt{src/fem/PortModeSolver.cpp::computeMode::couplingWeights}\\
+$s_p(\omega)$ & \texttt{src/fem/PortModeSolver.cpp::powerNormalizationFactor}\\
+$b_p$, $S_{pq}$ & \texttt{src/post/ResultExtractor.cpp::extract / portProjection}\\
+PARDISO LU/LDL\textsuperscript{T} of $\bm A(\omega_0)$ & \texttt{src/linalg/MklPardisoSolver.cpp}\\
+CSR pattern reuse & \texttt{src/linalg/SparseMatrix.cpp::createPattern}, \texttt{FEMAssembler::sparsityPattern\_}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The MOR module will introduce a new namespace
+\textcolor{gray}{\texttt{fem::mor}} living under \texttt{src/mor/} with no
+upward dependency on \texttt{app}; its only inputs are the existing
+\texttt{FEMAssembler}, \texttt{PortModeSolver}, and a \texttt{LinearSolver}
+abstraction.
+
+%---------------------------------------------------------------
+\section{Validation strategy}
+
+\begin{enumerate}
+\item \textbf{Analytic check}. Empty rectangular waveguide with a flat
+      lossless body: $S_{21}(\omega)=\mathrm{e}^{-\im\beta L}$ exactly.
+      ROM with $L=2,\ q=20$ must match within $10^{-6}$ in $|S|$ over a
+      2:1 band.
+\item \textbf{Loaded BP-filter (project benchmark)}. The Krylov ROM with
+      $L=3,\ q=40$ over $40$--$43$\,GHz vs.\ the direct 401-point sweep:
+      $\rho_S \le 0.05$\,dB everywhere.
+\item \textbf{Energy conservation}. For lossless cases verify
+      $|S_{11}|^2+|S_{21}|^2 \le 1+10^{-3}$ at all sweep points after ROM
+      evaluation (already a regression target for direct sweep).
+\item \textbf{Convergence in $q$}. Plot $\max_\omega \|\widetilde{\bm
+      S}-\bm S\|_F$ vs.\ $q$ at fixed $L$. Expect exponential decay until
+      $q$ saturates.
+\end{enumerate}
+
+%---------------------------------------------------------------
+\section{Limitations and out-of-scope items}
+
+\begin{itemize}
+\item \textbf{Strong dispersion}. The current model handles linear $\sigma$
+      losses exactly and Debye/Drude models via affine expansion. Highly
+      non-rational $\varepsilon(\omega)$ (e.g.\ measured tabulated data
+      with sharp resonances) requires either piecewise rational fitting or
+      a different reduction method (e.g.\ AAA + balanced truncation),
+      which is out of scope.
+\item \textbf{Strong nonlinearity}. Out of scope; non-iterative MOR is not
+      meaningful here.
+\item \textbf{Eigenmode tracking near band edges}. ROM reproduces the
+      transfer function but does not robustly identify resonances inside
+      stop-bands; a separate Krylov-Schur eigenvalue path is delegated to
+      a future module.
+\item \textbf{Adaptive p-refinement coupling}. ROM is built on a fixed
+      mesh and basis order. h/p-adaptivity in the same sweep changes
+      operators between iterations; supporting this requires re-projecting
+      $\bm V$ onto the new $V_h$, which is treated in a future revision.
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{References (informal)}
+
+\begin{itemize}
+\item Z.\ Bai, ``Krylov subspace techniques for reduced-order modeling of large-scale dynamical systems,'' Appl.\ Numer.\ Math., 2002.
+\item A.\ Odabasioglu, M.\ Celik, L.~T.\ Pileggi, ``PRIMA: passive reduced-order interconnect macromodeling algorithm,'' IEEE T-CAD, 1998.
+\item J.-S.\ Zhao, J.-F.\ Lee, ``A model order reduction technique using Krylov subspace methods for the analysis of microwave circuits,'' IEEE Microw.\ Wireless Compon.\ Lett., 2002.
+\item E.\ Grimme, ``Krylov projection methods for model reduction,'' PhD thesis, Univ.\ of Illinois, 1997.
+\item V.\ de la Rubia, U.\ Razafison, Y.\ Maday, ``Reliable fast frequency sweep for microwave devices via the reduced basis method,'' IEEE TMTT, 2009.
+\end{itemize}
+
+\end{document}

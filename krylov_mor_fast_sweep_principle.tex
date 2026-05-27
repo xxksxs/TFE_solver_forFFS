@@ -1,0 +1,456 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{xurl}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\geometry{left=2.5cm,right=2.5cm,top=2.6cm,bottom=2.6cm}
+\setlist{nosep}
+\linespread{1.12}
+
+\newcommand{\jj}{\mathrm{j}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\CC}{\mathbb{C}}
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cB}{\mathcal{B}}
+\newcommand{\cC}{\mathcal{C}}
+\newcommand{\cH}{\mathcal{H}}
+\newcommand{\cK}{\mathcal{K}}
+\newcommand{\cM}{\mathcal{M}}
+\newcommand{\cO}{\mathcal{O}}
+\newcommand{\herm}{\mathsf{H}}
+\newcommand{\transpose}{\mathsf{T}}
+
+\title{基于 Krylov 子空间的 MOR 快速扫频原理}
+\author{独立原理说明}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+基于 Krylov 子空间的模型降阶（Model Order Reduction, MOR）快速扫频，是频域电磁仿真中减少重复大规模线性方程求解的一类方法。它的基本思想是：在少数中心频率处构造能够捕捉局部频率响应矩的低维 Krylov 子空间，把原始高维电磁系统投影到低维系统中，再用该低维系统在一个频带内快速评价端口响应或场量。本文从频域 Maxwell 方程离散化、传递函数、矩匹配、Arnoldi/Lanczos 投影、误差与自适应频带覆盖等角度说明其数学原理。
+\end{abstract}
+
+\tableofcontents
+
+\section{问题背景}
+
+频域电磁问题通常需要在一段频带
+\[
+    \Omega_\omega=[\omega_{\min},\omega_{\max}]
+\]
+内求解多个频点。例如微波滤波器、天线、互连结构和谐振腔分析中，工程上关心的往往不是单个场解，而是频率相关的散射参数、阻抗、导纳或局部场强。
+
+对每个频点逐点求解时，离散系统可抽象为
+\begin{equation}
+    A(s)x(s)=b(s),\qquad s=\jj\omega,
+    \label{eq:full-system}
+\end{equation}
+其中 $A(s)\in\CC^{N\times N}$，$N$ 可能达到几十万、几百万甚至更高。若扫频点数为 $n_f$，直接扫频近似需要 $n_f$ 次大规模装配和求解，成本很高。
+
+MOR 快速扫频的目标是构造一个低阶模型
+\begin{equation}
+    A_r(s)z(s)=b_r(s),\qquad A_r(s)\in\CC^{r\times r},\quad r\ll N,
+\end{equation}
+使输出响应
+\[
+    y(s)=C(s)^{\herm}x(s)
+\]
+可由
+\[
+    y_r(s)=C_r(s)^{\herm}z(s)
+\]
+近似。这样，高成本求解只发生在建模阶段；扫频阶段只需求解小规模系统。
+
+\section{从 Maxwell 方程到参数线性系统}
+
+以电场形式为例，取时间因子 $\exp(st)$。线性介质中的频域 Maxwell 方程可化为
+\begin{equation}
+    \nabla\times\mu^{-1}\nabla\times E
+    +s\sigma E+s^2\varepsilon E
+    =-sJ .
+    \label{eq:curlcurl}
+\end{equation}
+用边元有限元、矩量法或其他离散方法后，可得到频率参数系统
+\begin{equation}
+    A(s)x(s)=B(s)u(s),\qquad
+    y(s)=C(s)^{\herm}x(s)+D(s)u(s).
+    \label{eq:mimo-system}
+\end{equation}
+这里 $u(s)$ 表示端口激励，$y(s)$ 表示端口电压、电流或功率波输出。若暂时固定输入输出算子并忽略直接项，频率响应矩阵为
+\begin{equation}
+    H(s)=C^{\herm}A(s)^{-1}B .
+    \label{eq:transfer}
+\end{equation}
+快速扫频实际要近似的是 $H(s)$，而不一定要在所有频点都恢复完整的 $x(s)$。
+
+很多离散系统可写成多项式或局部解析形式：
+\begin{equation}
+    A(s)=A_0+sA_1+s^2A_2+\cdots .
+    \label{eq:poly-system}
+\end{equation}
+例如有限元 curl--curl 方程通常具有刚度项、损耗项和质量项；积分方程中的 Green 函数虽非多项式，但在不跨越奇点的局部频带内也可作解析展开或有理近似。
+
+\section{中心频率展开}
+
+选择中心频率 $s_0=\jj\omega_0$，令
+\[
+    \sigma=s-s_0 .
+\]
+若局部模型可写成一阶仿射形式
+\begin{equation}
+    A(s_0+\sigma)=A_0+\sigma A_1,
+    \label{eq:affine}
+\end{equation}
+则
+\begin{equation}
+    x(\sigma)
+    =(A_0+\sigma A_1)^{-1}B .
+\end{equation}
+假设 $A_0$ 非奇异，有
+\begin{equation}
+    x(\sigma)
+    =
+    (I-\sigma K)^{-1}R,
+    \qquad
+    K=-A_0^{-1}A_1,\quad R=A_0^{-1}B.
+    \label{eq:resolvent}
+\end{equation}
+因此响应矩阵为
+\begin{equation}
+    H(\sigma)
+    =
+    C^{\herm}(I-\sigma K)^{-1}R .
+    \label{eq:resolvent-transfer}
+\end{equation}
+
+对于二次系统
+\[
+    (K_0+sK_1+s^2K_2)x=b,
+\]
+可以用伴随线性化把它转成一阶 pencil。例如在 $s_0$ 附近写为
+\[
+    \widetilde K_0+\sigma\widetilde K_1+\sigma^2K_2,
+\]
+引入增广未知量 $w=[x,\sigma x]^\transpose$，即可得到
+\[
+    (\cA_0+\sigma\cA_1)w=\cB .
+\]
+所以，一阶仿射模型并不局限于原始系统本身是一阶频率相关；它也是研究一般局部扫频 MOR 的标准入口。
+
+\section{矩与矩匹配}
+
+由 resolvent 展开
+\begin{equation}
+    (I-\sigma K)^{-1}
+    =
+    I+\sigma K+\sigma^2K^2+\cdots ,
+\end{equation}
+可得
+\begin{equation}
+    H(\sigma)
+    =
+    \sum_{n=0}^{\infty}M_n\sigma^n,
+    \qquad
+    M_n=C^{\herm}K^nR .
+    \label{eq:moments}
+\end{equation}
+$M_n$ 称为传递函数在 $s_0$ 处的矩。它们描述了频率响应在中心点附近的导数信息。若一个低阶模型
+\[
+    H_r(\sigma)=C_r^{\herm}(I-\sigma K_r)^{-1}R_r
+\]
+满足
+\begin{equation}
+    H(\sigma)-H_r(\sigma)=\cO(\sigma^q),
+    \label{eq:moment-match}
+\end{equation}
+就称它匹配了前 $q$ 阶矩。矩匹配越多，低阶模型在中心频率附近通常越准确。
+
+直接计算高阶矩 $C^{\herm}K^nR$ 并不理想，因为 $K=-A_0^{-1}A_1$ 的每一次作用都涉及一次大规模线性求解，而且高阶矩数值病态。Krylov 子空间方法的妙处在于：它不显式形成 $K$，而是通过反复求解 $A_0v=A_1q$ 构造一个包含这些矩信息的低维空间。
+
+\section{Krylov 子空间}
+
+给定矩阵 $K$ 和起始块 $R$，块 Krylov 子空间定义为
+\begin{equation}
+    \cK_m(K,R)
+    =
+    \operatorname{span}\{R,KR,K^2R,\ldots,K^{m-1}R\}.
+    \label{eq:krylov}
+\end{equation}
+若 $R$ 有 $p$ 列，则这是块 Krylov 空间。构造正交基
+\[
+    V_m=[v_1,\ldots,v_r]\in\CC^{N\times r},
+    \qquad V_m^{\herm}V_m=I,
+\]
+使
+\[
+    \operatorname{range}(V_m)\approx \cK_m(K,R).
+\]
+由于 $R,KR,\ldots$ 正是矩展开 \eqref{eq:moments} 中出现的状态方向，投影到该子空间就能保留中心频率附近的响应导数信息。
+
+实际计算时不显式形成 $K$。给定一个向量 $q$，计算
+\[
+    Kq=-A_0^{-1}A_1q
+\]
+可分为两步：
+\begin{enumerate}
+    \item 先计算 $t=A_1q$；
+    \item 再求解 $A_0z=-t$，得到 $z=Kq$。
+\end{enumerate}
+因此一次中心频率矩阵 $A_0$ 的分解可以服务于多次 Krylov 向量生成。
+
+\section{投影降阶}
+
+用 $V_m$ 近似全阶解空间：
+\[
+    x(\sigma)\approx V_m z(\sigma).
+\]
+将其代入原方程并施加 Galerkin 条件
+\[
+    V_m^{\herm}\bigl((A_0+\sigma A_1)V_mz-B\bigr)=0,
+\]
+得到低阶系统
+\begin{equation}
+    (A_{r,0}+\sigma A_{r,1})z(\sigma)=B_r,
+    \label{eq:rom}
+\end{equation}
+其中
+\begin{equation}
+    A_{r,0}=V_m^{\herm}A_0V_m,\qquad
+    A_{r,1}=V_m^{\herm}A_1V_m,\qquad
+    B_r=V_m^{\herm}B .
+\end{equation}
+输出矩阵为
+\begin{equation}
+    C_r=V_m^{\herm}C,
+    \qquad
+    H_r(\sigma)=C_r^{\herm}(A_{r,0}+\sigma A_{r,1})^{-1}B_r .
+    \label{eq:rom-transfer}
+\end{equation}
+由于 $r\ll N$，式 \eqref{eq:rom} 在扫频阶段非常便宜。
+
+若系统非 Hermitian 或输入输出方向差异明显，可以采用 Petrov--Galerkin 投影：
+\[
+    x\approx V_mz,\qquad
+    W_m^{\herm}\bigl((A_0+\sigma A_1)V_mz-B\bigr)=0,
+\]
+其中 $W_m$ 是左 Krylov 子空间基，满足 $W_m^{\herm}V_m$ 非奇异。此时
+\begin{equation}
+    A_r(s)=W_m^{\herm}A(s)V_m,\qquad
+    B_r=W_m^{\herm}B,\qquad
+    C_r=V_m^{\herm}C .
+    \label{eq:petrov}
+\end{equation}
+双边 Lanczos、Arnoldi、块 Arnoldi 都可以看作这一路径的具体实现。
+
+\section{为什么 Krylov-MOR 能快速扫频}
+
+Krylov-MOR 快速扫频的加速来自两个层面：
+\begin{enumerate}
+    \item \textbf{建模阶段复用中心矩阵。} 在 $s_0$ 处分解 $A_0$，再通过多次回代生成 Krylov 基。相比每个频点都分解不同矩阵，成本显著降低。
+    \item \textbf{扫频阶段求解低阶系统。} 对每个频点只需求解 $r\times r$ 系统，而不是 $N\times N$ 系统。当 $r$ 只有几十到几百而 $N$ 很大时，扫频成本几乎可以忽略。
+\end{enumerate}
+
+以单中心模型为例，完整流程为：
+\begin{enumerate}
+    \item 选择中心频率 $s_0$，装配 $A_0=A(s_0)$ 和局部导数矩阵 $A_1$。
+    \item 分解 $A_0$，计算起始块 $R=A_0^{-1}B$。
+    \item 用 Arnoldi 或 Lanczos 构造 Krylov 基 $V_m$。
+    \item 形成低阶矩阵 $A_r(s)=V_m^{\herm}A(s)V_m$ 和低阶输入输出矩阵。
+    \item 在目标频点上快速求解低阶系统并输出 $S$ 参数、阻抗或导纳。
+\end{enumerate}
+
+\section{与 Padé 逼近的关系}
+
+Krylov-MOR 与 Padé 有理逼近联系很深。对单输入单输出响应
+\[
+    h(\sigma)=c^{\herm}(I-\sigma K)^{-1}r,
+\]
+若用 $m$ 步 Arnoldi 或双边 Lanczos 得到低阶矩阵 $T_m$，则响应可写成
+\begin{equation}
+    h_m(\sigma)
+    =
+    c_r^{\herm}(I-\sigma T_m)^{-1}r_r .
+    \label{eq:pade-krylov}
+\end{equation}
+这是一个有理函数，其分母由 $\det(I-\sigma T_m)$ 给出。适当的投影条件会使 $h_m$ 匹配 $h$ 在 $\sigma=0$ 处的若干阶矩。因此，Krylov-MOR 可理解为一种稳定的、隐式的 Padé 矩匹配方法。
+
+相比显式 Taylor 多项式，式 \eqref{eq:pade-krylov} 的有理函数可以用极点描述谐振结构，因而更适合电磁频响中的尖峰、陷波和相位快速变化。
+
+\section{宽频扫频与多点 Krylov}
+
+单个中心频率的低阶模型只在局部频带内可靠。宽频扫频通常有两类扩展策略。
+
+\subsection{自适应分段扫频}
+
+把整个频带划分为多个子区间
+\[
+    \Omega_\omega=\bigcup_{k=1}^{n_c}\Omega_k .
+\]
+在每个子区间中心 $\omega_k$ 建立局部 Krylov-MOR 模型：
+\[
+    H_r^{(k)}(s)\approx H(s),\qquad s\in \jj\Omega_k .
+\]
+判断某个局部模型是否可接受，常用残差
+\begin{equation}
+    \eta_x(s)=
+    \frac{\|B-A(s)V_mz(s)\|_F}{\|B\|_F+\|A(s)\|_F\|V_mz(s)\|_F}
+    \label{eq:residual}
+\end{equation}
+或相邻阶模型差异
+\begin{equation}
+    \eta_y(s)=
+    \frac{\|H_{r}(s)-H_{r-\Delta r}(s)\|_F}
+    {\|H_r(s)\|_F+\epsilon_{\mathrm{mach}}}.
+    \label{eq:output-error}
+\end{equation}
+若误差超限，则增加 Krylov 阶数或新增中心频率。
+
+\subsection{多点 Krylov 合并}
+
+另一种做法是在多个展开点 $s_1,\ldots,s_q$ 构造子空间，再合并为一个全频带投影空间：
+\begin{equation}
+    \mathcal{V}
+    =
+    \operatorname{span}
+    \left\{
+    \cK_{m_1}(K_1,R_1),
+    \cK_{m_2}(K_2,R_2),
+    \ldots,
+    \cK_{m_q}(K_q,R_q)
+    \right\}.
+    \label{eq:multipoint}
+\end{equation}
+其中
+\[
+    K_i=-A(s_i)^{-1}A'(s_i),\qquad
+    R_i=A(s_i)^{-1}B .
+\]
+对 $\mathcal{V}$ 正交化后形成统一基 $V$，再构造
+\[
+    A_r(s)=V^{\herm}A(s)V .
+\]
+这种多点 MOR 可以避免频带切换，但低阶维数可能更大。
+
+\section{电磁网络输出：从场到 S 参数}
+
+对多端口频域电磁问题，MOR 通常先近似端口阻抗或导纳矩阵。例如
+\[
+    Z(s)=C_Z^{\herm}A(s)^{-1}B_Z .
+\]
+投影后得到
+\[
+    Z_r(s)=C_{Z,r}^{\herm}A_r(s)^{-1}B_{Z,r}.
+\]
+若参考阻抗为 $Z_0$，散射矩阵可由
+\begin{equation}
+    S_r(s)=\bigl(Z_r(s)-Z_0\bigr)\bigl(Z_r(s)+Z_0\bigr)^{-1}
+    \label{eq:sparam}
+\end{equation}
+计算。实际工程中也可以直接以功率波为输入输出，令 $H_r(s)$ 本身就是 $S_r(s)$ 的近似。
+
+需要注意，MOR 对全场的近似和对端口响应的近似并不完全等价。若只关心 $S$ 参数，投影空间可以围绕端口激励和端口观测构造；若还要输出场分布，则需要保证 $V_mz(s)$ 对场量也足够准确。
+
+\section{误差、稳定性与被动性}
+
+Krylov-MOR 快速扫频常见注意事项如下。
+
+\begin{enumerate}
+    \item \textbf{局部性。} 矩匹配保证中心频率附近准确，不保证远离中心后仍准确。谐振密集或材料色散强时，需要更多展开点。
+    \item \textbf{残差与响应误差不同。} 小残差通常意味着场解准确，但若系统条件数很大，残差误差可能被放大。
+    \item \textbf{数值正交性。} Arnoldi/Lanczos 过程需要维持正交或双正交，否则矩匹配阶数会退化。
+    \item \textbf{被动性。} 对无源网络，降阶模型最好保持被动性和稳定性。普通投影有时会产生非物理增益，需要额外检查或修正。
+    \item \textbf{频率相关边界。} 端口、PML、辐射边界和色散材料可能使 $A(s)$ 的频率依赖更复杂，局部线性化或导数近似要通过原方程残差验证。
+\end{enumerate}
+
+\section{一个简化算法}
+
+下面给出基于单点 Krylov-MOR 的快速扫频伪算法。
+
+\begin{enumerate}
+    \item 输入频带 $\Omega_\omega$、中心频率 $\omega_0$、阶数 $m$ 和误差容限 $\tau$。
+    \item 装配 $A(s_0)$、$A'(s_0)$、$B$、$C$，其中 $s_0=\jj\omega_0$。
+    \item 分解 $A(s_0)$。
+    \item 计算起始块 $R=A(s_0)^{-1}B$。
+    \item 用块 Arnoldi 生成
+    \[
+        V=\operatorname{orth}\{R,KR,\ldots,K^{m-1}R\},
+        \qquad K=-A(s_0)^{-1}A'(s_0).
+    \]
+    \item 构造低阶模型
+    \[
+        A_r(s)=V^{\herm}A(s)V,\quad
+        B_r=V^{\herm}B,\quad
+        C_r=V^{\herm}C .
+    \]
+    \item 对每个频点求解
+    \[
+        A_r(s)z(s)=B_r,\qquad
+        H_r(s)=C_r^{\herm}z(s).
+    \]
+    \item 在校验点计算原系统残差；若误差超过 $\tau$，增加阶数或新增中心频率。
+\end{enumerate}
+
+\section{总结}
+
+基于 Krylov 子空间的 MOR 快速扫频可以概括为三句话：
+\[
+    \text{频域电磁离散}
+    \Rightarrow
+    \text{参数线性系统}
+    \Rightarrow
+    \text{Krylov 投影低阶有理模型}.
+\]
+其核心数学结构是
+\[
+    H(s)=C^{\herm}A(s)^{-1}B
+    \quad\longrightarrow\quad
+    H_r(s)=C_r^{\herm}A_r(s)^{-1}B_r,
+    \qquad r\ll N .
+\]
+Krylov 子空间之所以有效，是因为它由中心频率响应的矩方向生成，天然匹配频率响应的局部导数信息；投影后的低阶系统又保留了有理函数形式，能够表达电磁谐振和极点行为。快速扫频的本质并不是跳过 Maxwell 方程，而是在少量完整求解的基础上构造可靠的低阶替身，用它替代大量重复的全阶频点求解。
+
+\begin{thebibliography}{9}
+
+\bibitem{feldmann1995}
+P. Feldmann and R. W. Freund,
+``Efficient linear circuit analysis by Padé approximation via the Lanczos process,''
+\emph{IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems},
+vol. 14, no. 5, pp. 639--649, 1995.
+\url{https://doi.org/10.1109/43.384428}
+
+\bibitem{freund2003}
+R. W. Freund,
+``Model reduction methods based on Krylov subspaces,''
+\emph{Acta Numerica},
+vol. 12, pp. 267--319, 2003.
+\url{https://doi.org/10.1017/S0962492902000120}
+
+\bibitem{bai2002}
+Z. Bai,
+``Krylov subspace techniques for reduced-order modeling of large-scale dynamical systems,''
+\emph{Applied Numerical Mathematics},
+vol. 43, no. 1--2, pp. 9--44, 2002.
+\url{https://doi.org/10.1016/S0168-9274(02)00116-2}
+
+\bibitem{antoulas2005}
+A. C. Antoulas,
+\emph{Approximation of Large-Scale Dynamical Systems},
+SIAM, 2005.
+\url{https://doi.org/10.1137/1.9780898718713}
+
+\bibitem{bracken1999}
+J. E. Bracken, D.-K. Sun, and Z. J. Cendes,
+``Characterization of electromagnetic devices via reduced-order models,''
+\emph{Computer Methods in Applied Mechanics and Engineering},
+vol. 169, no. 3--4, pp. 311--330, 1999.
+\url{https://doi.org/10.1016/S0045-7825(98)00160-1}
+
+\end{thebibliography}
+
+\end{document}

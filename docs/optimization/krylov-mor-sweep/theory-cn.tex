@@ -1,0 +1,407 @@
+% !TEX program = xelatex
+% BP-FEM 求解器快速扫频模块（Krylov 子空间降阶模型）的中文理论文档。
+% 自包含，使用 `xelatex theory-cn.tex` 编译。
+% 与 theory.tex（英文版）一一对应，可任选其一作为权威文档。
+
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\im}{\mathrm{i}}
+\DeclareMathOperator{\range}{range}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Real}{Re}
+\DeclareMathOperator{\Imag}{Im}
+\DeclareMathOperator{\spanop}{span}
+
+\newtheorem{definition}{定义}
+\newtheorem{theorem}{定理}
+\newtheorem{remark}{注}
+
+\title{BP-FEM 频域求解器 \\ 基于 Krylov 子空间的快速扫频降阶模型}
+\author{BP-FEM 优化路线}
+\date{评审稿}
+
+% 算法环境本地化
+\floatname{algorithm}{算法}
+\renewcommand{\algorithmicrequire}{\textbf{输入：}}
+\renewcommand{\algorithmicensure}{\textbf{输出：}}
+\renewcommand{\algorithmicreturn}{\textbf{返回}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+%---------------------------------------------------------------
+\section{文档定位}
+
+本文档说明在 BP-FEM 求解器中新增 Krylov 子空间降阶模型 (Model-Order Reduction, MOR) 模块的数学基础。该模块作为\emph{快速扫频}（fast frequency sweep）方案，与现有的逐频点直接求解（\texttt{MklPardisoSolver}）和迭代回退（\texttt{BiCGStabSolver}）并列存在。
+
+目标是把目标频带上 $N_f$ 频点的扫频从 $\mathcal{O}(N_f)$ 次完整矩阵分解，降为对少量 $L$ 个展开点做矩阵分解，加上 $\mathcal{O}(N_f)$ 次小尺寸密集模型评估。降阶模型的维数比全空间小 2 个数量级。
+
+文档面向具体实现：所有符号都对应代码中已存在的对象（\texttt{FEMAssembler}、\texttt{PortModeSolver}、\texttt{MklPardisoSolver}、\texttt{ResultExtractor}、\texttt{SparseMatrix}）。涉及到的源码位置以\textcolor{gray}{灰色}注释标注，例如\textcolor{gray}{\texttt{// FEMAssembler::assemble}}。
+
+%---------------------------------------------------------------
+\section{连续问题与有限元离散}
+
+\subsection{强形式}
+
+设有界 Lipschitz 区域 $\Omega \subset \R^3$，外边界由若干波端口面 $\{\Gamma_p\}_{p=1}^{N_p}$ 与完美电导体壁 (PEC) $\Gamma_{\mathrm{PEC}}$ 构成，$\partial\Omega = \Gamma_{\mathrm{PEC}}\cup \bigcup_p \Gamma_p$。时谐约定为 $\mathrm{e}^{+\im\omega t}$。在角频率 $\omega = 2\pi f$ 下，电场 $\bm E(\bm r,\omega) \in H(\mathrm{curl};\Omega)$ 满足
+\begin{align}
+  \nabla\times\!\big(\mu_r^{-1}\nabla\times\bm E\big)
+  -k_0^2\,\varepsilon_c(\omega)\,\bm E
+  &= \bm 0
+  & &\text{在 } \Omega \text{ 内},\label{eq:strong}\\
+  \hat{\bm n}\times\bm E &= \bm 0
+  & &\text{在 } \Gamma_{\mathrm{PEC}} \text{ 上},\\
+  \hat{\bm n}\times\!\big(\mu_r^{-1}\nabla\times\bm E\big)
+  &= \mathcal B_p(\bm E;\omega) + \bm g_p(\omega)
+  & &\text{在 } \Gamma_p \text{ 上},
+\end{align}
+其中 $k_0 = \omega/c_0$，$c_0$ 是真空光速，$\varepsilon_c(\omega) = \varepsilon_r - \im\sigma/(\omega\varepsilon_0)$ 是含损耗的等效介电常数\textcolor{gray}{（\texttt{FEMAssembler::assemble} 的体装配项）}。
+
+\subsection{波端口边界形式}
+
+每个端口面 $\Gamma_p$ 上对应一个数值求得的主导横向模 $\bm e_p^{(t)}: \Gamma_p \to \R^3$，其截止波数为 $k_{c,p}$，传播常数为
+\(
+  \beta_p(\omega) = \sqrt{k_0^2 - k_{c,p}^2}.
+\)
+该端口算子负责吸收传播模式并通过下式投影出激励
+\(
+  \bm g_p = -2\,\im\beta_p\,a_p^{\mathrm{inc}}\,(\hat{\bm n}\times\bm e_p^{(t)}),
+\)
+其中 $a_p^{\mathrm{inc}}$ 是入射波的复振幅，量纲为 $\sqrt{\mathrm{W}}$。模式的 L\textsuperscript{2} 形状已被规范化为 $\int_{\Gamma_p} |\bm e_p^{(t)}|^2\,\mathrm dS = 1$，功率归一化因子由 \textcolor{gray}{\texttt{powerNormalizationFactor}} 给出：
+\begin{equation}
+  s_p(\omega) = \frac{1}{\sqrt{P_p^{\mathrm{unit}}(\omega)}}, \qquad
+  P_p^{\mathrm{unit}}(\omega) = \frac{\beta_p(\omega)}{2\omega\mu_0}
+  \int_{\Gamma_p}|\bm e_p^{(t)}|^2\,\mathrm dS.
+  \label{eq:powernorm}
+\end{equation}
+在该归一化下，右端项的入射幅度变为 $\sqrt{P_p^{\mathrm W}}\,s_p(\omega)$，其中 $P_p^{\mathrm W}$ 为用户指定的入射功率\textcolor{gray}{（\texttt{PortDefinition::magnitudeW}）}。
+
+\subsection{Galerkin 离散}
+
+记 $V_h\subset H(\mathrm{curl};\Omega)$ 为由 H(curl) 协调的 Nedelec/Whitney 棱元（零阶或一阶层次型；\textcolor{gray}{\texttt{EdgeTopology}}）张成的有限元子空间。设全局自由度向量为 $\bm x(\omega)\in\C^{n}$。在频率 $\omega$ 处的离散双线性形式与右端项为：
+\begin{align}
+  \bm K_{ij} &= \int_\Omega \mu_r^{-1}\,(\nabla\times\bm w_i)\cdot
+                 (\nabla\times\bm w_j)\,\mathrm dV,
+  & \text{[刚度矩阵]}\\
+  \bm M_{ij} &= \int_\Omega \varepsilon_c(\omega)\,\bm w_i\cdot\bm w_j\,\mathrm dV,
+  & \text{[质量矩阵；若 $\sigma\!\neq\!0$ 则弱依赖于 $\omega$]}\\
+  \bm m_p    &= \int_{\Gamma_p}(\hat{\bm n}\times\bm e_p^{(t)})\cdot\bm w_i\,\mathrm dS,
+  & \text{[端口投影 / 耦合向量]}\\
+  \bm f(\omega) &= \sum_{p=1}^{N_p} 2\,\im\beta_p(\omega)\,\sqrt{P_p^{\mathrm W}}\,s_p(\omega)\,\delta_p^{\mathrm{exc}}\,\bm m_p,
+  & \text{[波端口右端项]}
+\end{align}
+组装得到离散系统：
+\begin{equation}
+  \boxed{\;
+  \bm A(\omega)\,\bm x(\omega) = \bm f(\omega),\qquad
+  \bm A(\omega) = \bm K - k_0^2\,\bm M
+  + \im\sum_{p=1}^{N_p} \beta_p(\omega)\,\bm m_p \bm m_p^{\!\top}.
+  \;}
+  \label{eq:discrete}
+\end{equation}
+式 \eqref{eq:discrete} 与现有求解器在每个频点装配的系统\emph{完全一致}\textcolor{gray}{（\texttt{FEMAssembler::assemble} 装配 $\bm K,\bm M,\bm m_p$；\texttt{applyWavePorts} 处理秩 1 端口项）}。S 参数后处理给出
+\begin{equation}
+  b_p(\omega) = \frac{\bm m_p^{\!\top}\,\bm x(\omega)}{s_p(\omega)},
+  \qquad
+  S_{pq}(\omega) = \frac{b_p(\omega)-a_p^{\mathrm{inc}}\,\delta_{pq}}{a_q^{\mathrm{inc}}}
+  \quad\text{（单位激励 $a_q^{\mathrm{inc}}=1$ 时）}.
+  \label{eq:sparam}
+\end{equation}
+
+\begin{remark}[这一形式为何对 MOR 友好]
+式 \eqref{eq:discrete} 的 $\bm A(\omega)$ 是 $\omega$ 的低阶\emph{有理矩阵函数}：
+\begin{itemize}
+  \item $\bm K - k_0^2\bm M$ 关于 $k_0$（进而关于 $\omega$）是二次多项式；$\varepsilon_c$ 对 $\omega$ 的弱依赖可由 \S\ref{sec:dispersion} 的仿射展开精确处理。
+  \item 每个端口项 $\im\beta_p(\omega)\bm m_p\bm m_p^{\!\top}$ 是秩 1 修正，频率依赖只集中在标量 $\beta_p(\omega)=\sqrt{k_0^2-k_{c,p}^2}$。
+\end{itemize}
+正是这种结构，使得在一个或少数几个展开点上构建的 Krylov 子空间能捕获整个传递函数 $S(\omega)$。
+\end{remark}
+
+%---------------------------------------------------------------
+\section{线性时不变传递模型}
+
+\subsection{状态空间嵌入}
+
+为整理代数推导方便，把 $k_0^2$（或对二阶矩匹配而言的 $\omega$）作为展开参数，并把参数化系统写成描述子（descriptor）形式：
+\begin{equation}
+  \big[\bm K - k_0^2\,\bm M + \im\sum_p \beta_p(\omega)\,\bm m_p\bm m_p^{\!\top}\big]\,
+  \bm x = \bm B\,\bm u,
+  \qquad \bm y = \bm C\,\bm x,
+  \label{eq:lti}
+\end{equation}
+其中输入矩阵 $\bm B = [2\im\beta_1 s_1 \bm m_1\;\cdots\;2\im\beta_{N_p} s_{N_p}\bm m_{N_p}]$，输入向量 $\bm u\in\C^{N_p}$ 储存各端口入射幅度，输出矩阵 $\bm C = [\bm m_1\;\cdots\;\bm m_{N_p}]^{\!\top}/\diag(s_p)$。我们关心的传递函数为
+\begin{equation}
+  \bm H(\omega) = \bm C\,\bm A(\omega)^{-1}\bm B \in \C^{N_p\times N_p},
+\end{equation}
+其 $(p,q)$ 元就是 \eqref{eq:sparam} 中的 $b_p/a_q^{\mathrm{inc}}$（反射对角项相差一个已知的恒等加项）。
+
+\subsection{两种 MOR 形式}
+
+我们支持两种形式，因为它们各有 trade-off，事先选定一种属于过早优化：
+
+\paragraph{形式 A：单点平移反演 Krylov。}
+取展开点 $\omega_0$（通常是带宽中心）。定义平移算子
+\(
+  \bm A_0 = \bm A(\omega_0).
+\)
+Krylov 子空间
+\begin{equation}
+  \mathcal{K}_q(\bm A_0^{-1}\bm M,\,\bm A_0^{-1}\bm B)
+  = \spanop\!\big\{\bm A_0^{-1}\bm B,\ (\bm A_0^{-1}\bm M)\bm A_0^{-1}\bm B,\ \ldots,
+                    (\bm A_0^{-1}\bm M)^{q-1}\bm A_0^{-1}\bm B\big\}
+  \label{eq:krylov-singlepoint}
+\end{equation}
+（块 Arnoldi 版本，PRIMA 风格）匹配 $\bm H$ 在 $\omega_0$ 周围的 $2q$ 个矩。
+
+\paragraph{形式 B：多点（rational）Krylov。}
+在扫频带内选若干展开点 $\{\omega_0^{(1)},\dots,\omega_0^{(L)}\}$。对每个展开点 $\omega_0^{(\ell)}$ 因式分解一次 $\bm A_0^{(\ell)}$，并把对应的 shift-and-invert Krylov 子空间的 $q_\ell$ 列附加到全局基。这些子空间的并集构成有理 Krylov 子空间，可以在每个展开点上同时匹配矩，对宽带问题精度远高于形式 A。
+
+两种形式都通过子空间 $\bm V$ 投影 $\bm A(\omega)$ 得到降阶模型：
+\begin{equation}
+  \widetilde{\bm A}(\omega) = \bm V^{\!*}\bm A(\omega)\bm V,\qquad
+  \widetilde{\bm B} = \bm V^{\!*}\bm B,\qquad
+  \widetilde{\bm C} = \bm C\,\bm V,
+\end{equation}
+对应阶数为 $q$ 的降阶传递函数 $\widetilde{\bm H}(\omega) = \widetilde{\bm C}\,\widetilde{\bm A}(\omega)^{-1}\widetilde{\bm B}$。
+
+\begin{theorem}[单点形式的矩匹配性质]
+设 $\bm V\in\C^{n\times q}$ 是 $\mathcal{K}_q(\bm A_0^{-1}\bm M,\bm A_0^{-1}\bm B)$ 的标准正交基。Galerkin 投影 $\widetilde{\bm A}(\omega) = \bm V^{\!*}\bm A(\omega)\bm V$ 给出的降阶模型在 $\omega_0$ 周围匹配原传递函数 $\bm H(\omega)$ 的前 $2q$ 阶矩（Grimme 定理）。即
+\(
+  \tilde H_{pq}^{(k)}(\omega_0) = H_{pq}^{(k)}(\omega_0)
+\)
+对所有 $k=0,1,\dots,2q-1$ 与 $p,q$ 成立。
+\end{theorem}
+
+\begin{remark}[对称性保持]
+$\bm K,\bm M$ 是实对称矩阵，$\bm m_p\bm m_p^{\!\top}$ 在本装配中是半正定的。Galerkin 投影（左乘 $\bm V^{\!*}$、右乘 $\bm V$）配合标准正交的 $\bm V$，可使降阶系统保留同样的复对称结构。降阶后的 $\widetilde{\bm A}$ 是一个小型稠密复对称矩阵，可用 LDL\textsuperscript{T} 在 $\mathcal{O}(q^3)$ 内求解。
+\end{remark}
+
+\subsection{频率相关材料模型}\label{sec:dispersion}
+
+设 $\varepsilon_c(\omega)$ 为 $\omega$ 的有理函数。通用的双线性形式仿射展开为：
+\begin{equation}
+  \bm A(\omega) = \bm K + \sum_{i=0}^{N_a} \alpha_i(\omega)\,\bm A_i,\qquad
+  \alpha_i(\omega)\in\{\,1,\;k_0^2,\;\im k_0,\;\im\beta_p(\omega),\ldots\,\}.
+\end{equation}
+每个 $\bm A_i$ 在离线阶段装配\emph{一次}，并以 CSR 形式储存（与现有 \textcolor{gray}{\texttt{SparsePattern}} 缓存共享稀疏图）。降阶算子变为
+\begin{equation}
+  \widetilde{\bm A}(\omega) = \bm V^{\!*}\bm K\bm V + \sum_i \alpha_i(\omega)\,
+                              \bm V^{\!*}\bm A_i\bm V,
+\end{equation}
+因此每个频点的在线代价是 $\mathcal{O}(N_a q^2)$（装配）加 $\mathcal{O}(q^3)$（求解），与全空间自由度 $n$ 无关。
+
+%---------------------------------------------------------------
+\section{算法}
+
+\subsection{单点形式的块 Arnoldi}
+
+\begin{algorithm}[h]
+\caption{块 Arnoldi（单点 Krylov MOR）}
+\label{alg:block-arnoldi}
+\begin{algorithmic}[1]
+\Require 展开点 $\omega_0$，最大矩匹配阶 $q$，残差容差 $\tau$
+\Statex 算子：$\bm K$、$\bm M$、$\bm B$、$\bm C$ 已装配
+\State 计算 $\bm A_0 \gets \bm A(\omega_0)$，调用 PARDISO 完成一次因式分解
+\Comment{\textcolor{gray}{\texttt{MklPardisoSolver}：在降阶阶段共享符号分解}}
+\State $\bm V_1 \gets \mathrm{orth}(\bm A_0^{-1} \bm B)$
+\For{$j = 1,\dots,q$}
+  \State $\bm W \gets \bm A_0^{-1}\,\bm M\,\bm V_j$
+  \For{$i = 1,\dots,j$}
+    \State $\bm H_{ij}\gets \bm V_i^{\!*}\bm W$，\quad $\bm W\gets \bm W - \bm V_i\,\bm H_{ij}$
+    \Comment{修正 Gram-Schmidt}
+  \EndFor
+  \State （必要时对 $\bm W$ 做二次重正交化。）
+  \State $\bm V_{j+1} \gets \mathrm{orth}(\bm W)$；若 $\|\bm W\| < \tau\|\bm V_1\|$ 则中止
+\EndFor
+\State $\bm V \gets [\bm V_1,\bm V_2,\ldots]$
+\State 构造降阶矩阵：$\widetilde{\bm K}\!=\!\bm V^{\!*}\bm K\bm V$、$\widetilde{\bm M}\!=\!\bm V^{\!*}\bm M\bm V$、$\widetilde{\bm m}_p\!=\!\bm V^{\!*}\bm m_p$
+\State \Return $\bm V$，$\widetilde{\bm K}$，$\widetilde{\bm M}$，$\{\widetilde{\bm m}_p\}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{多点（有理）Krylov}
+
+\begin{algorithm}[h]
+\caption{自适应有理 Krylov MOR 扫频}
+\label{alg:rational-krylov}
+\begin{algorithmic}[1]
+\Require 扫频带 $[\omega_a,\omega_b]$，目标容差 $\varepsilon_S$，ROM 最大阶 $q_{\max}$
+\State 选择初始展开点 $\Sigma_0$（例如 $\{\omega_a,\omega_m,\omega_b\}$）
+\State $\bm V \gets [\,]$
+\For{每个 $\omega_0^{(\ell)} \in \Sigma_0$}
+  \State 因式分解 $\bm A_0^{(\ell)} = \bm A(\omega_0^{(\ell)})$
+  \State 运行算法 \ref{alg:block-arnoldi} 共 $q_\ell$ 步，把列附加到 $\bm V$
+\EndFor
+\State 对 $\bm V$ 做全局正交化；构造降阶算子
+\Repeat
+  \State 在探针集 $\Omega_p\subset[\omega_a,\omega_b]$ 上评估 $\widetilde{\bm H}(\omega)$
+  \State 由 \S\ref{sec:residual} 计算残差指示器 $\rho(\omega)$
+  \State $\omega^\star \gets \arg\max_{\omega\in\Omega_p}\rho(\omega)$
+  \If{$\rho(\omega^\star) > \varepsilon_S$ 且 $\dim\bm V < q_{\max}$}
+    \State 因式分解 $\bm A(\omega^\star)$，附加 Krylov 块，重新正交化
+  \EndIf
+\Until{$\rho(\omega^\star) \le \varepsilon_S$ 或预算耗尽}
+\State \Return $\bm V$ 与降阶算子
+\end{algorithmic}
+\end{algorithm}
+
+%---------------------------------------------------------------
+\section{误差与稳定性指示器}\label{sec:residual}
+
+我们暴露三种指示器；用户级容差控制 (R3)，但 (R1) 与 (R2) 对诊断必不可少。
+
+\paragraph{(R1) 代数残差。}
+对每个被评估的频率，把降阶解抬升回全空间的相对残差为
+\begin{equation}
+  \rho_{\mathrm{alg}}(\omega) =
+  \frac{\|\bm A(\omega)\,\bm V\,\widetilde{\bm x}(\omega) - \bm f(\omega)\|_2}
+       {\|\bm f(\omega)\|_2}.
+\end{equation}
+若 $\rho_{\mathrm{alg}}$ 显著增大，说明 ROM 基过小或展开点放置不当。该指示器只需一次全空间矩阵-向量乘法（SpMV），不需要再做因式分解。
+
+\paragraph{(R2) 启发式矩残差。}
+完全在 ROM 内进行：
+\begin{equation}
+  \rho_{\mathrm{mom}}(\omega) =
+  \|\widetilde{\bm A}(\omega)\,\widetilde{\bm x}(\omega) - \widetilde{\bm B}\,\bm u\|_2
+  / \|\widetilde{\bm B}\,\bm u\|_2.
+\end{equation}
+本质是降阶系统线性解的自洽性检查，便于捕获 $\widetilde{\bm A}$ 条件数恶化。
+
+\paragraph{(R3) 验证点上的 S 参数差异。}
+在 $[\omega_a,\omega_b]$ 选小型验证集 $\Omega_v$，对它们运行现有的直接求解器。定义
+\begin{equation}
+  \rho_S = \max_{\omega\in\Omega_v} \big\|\widetilde{\bm S}(\omega)-\bm S(\omega)\big\|_F,
+\end{equation}
+这是对外的合同：ROM 输出必须与精确解在 $\rho_S \le \varepsilon_S$ 内一致（默认每个 $|S|$ 偏差不超过 0.01 dB）。
+
+%---------------------------------------------------------------
+\section{输出重构}
+
+\subsection{S 参数评估}
+
+对每个目标 $\omega$：
+\begin{enumerate}
+  \item 用缓存的 LDL\textsuperscript{T} 求解稠密降阶系统
+        $\widetilde{\bm A}(\omega)\,\widetilde{\bm x}(\omega) = \widetilde{\bm B}\,\bm u$。
+  \item 计算输出 $\bm y(\omega) = \widetilde{\bm C}\,\widetilde{\bm x}(\omega)$。
+  \item 应用现有功率归一化（$\widetilde{\bm C}$ 内部已包含 $1/s_p$，因此 $b_p = y_p$ 即可）。
+  \item 按式 \eqref{eq:sparam} 计算 $S_{pq}$。
+\end{enumerate}
+
+\subsection{场重构}
+
+需要某个 $\omega$ 处的全空间场时：
+\begin{equation}
+  \bm x(\omega) \approx \bm V\,\widetilde{\bm x}(\omega).
+\end{equation}
+因此 ROM 也能在任意频点输出 VTU，反投影代价 $\mathcal{O}(nq)$。受磁盘约束，默认仍保持 \texttt{--no-write-all-fields}，按需写出。
+
+%---------------------------------------------------------------
+\section{代价模型}
+
+设 $n$ = 全空间自由度，$q$ = ROM 维数，$N_f$ = 扫频点数，$N_v$ = 验证点数，$L$ = 展开点数，$T_{\mathrm{LU}}(n)$ = PARDISO 因式分解代价，$T_{\mathrm{solve}}(n)$ = 单次三角求解代价，$N_p$ = 端口数。
+
+\begin{table}[h]
+\centering
+\caption{$N_f$ 频点扫频的渐近代价对比}
+\begin{tabular}{lll}
+\toprule
+阶段 & 直接扫频 & Krylov MOR 扫频 \\
+\midrule
+装配 & $N_f \cdot T_{\mathrm{asm}}(n)$ & $L \cdot T_{\mathrm{asm}}(n)$ + 缓存子项\\
+因式分解 & $N_f \cdot T_{\mathrm{LU}}(n)$ & $L \cdot T_{\mathrm{LU}}(n)$\\
+求解 / Krylov 构造 & $N_f \cdot N_p \cdot T_{\mathrm{solve}}(n)$ & $L\cdot q \cdot N_p \cdot T_{\mathrm{solve}}(n)$\\
+每频点在线 & 0 & $\mathcal{O}(N_a q^2 + q^3)$\\
+验证 & 0 & $N_v \cdot T_{\mathrm{LU}}(n)$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+对本工程的 BP 滤波器基准（$n\!\approx\!2.9\!\times\!10^5$ 一阶 DOF，$N_f=401$，$L=2{-}3$，$q=30{-}60$，$N_v\!\sim\!5$）：
+\(
+  N_f / (L + N_v) \sim 401 / 8 \approx 50,
+\)
+即在不引入并行的情况下，墙钟时间预期减少约 50 倍。
+
+%---------------------------------------------------------------
+\section{数值安全保障}
+
+\begin{itemize}
+\item \textbf{重正交化}：默认使用修正 Gram-Schmidt + 一到二次再正交化；当正交性损失超过 $10^{-10}$ 时切换到 Householder。
+\item \textbf{deflation}：正交化后范数低于 $10^{-12}$ 的列被剔除并记录 deflation 事件。
+\item \textbf{条件性}：通过 LDL\textsuperscript{T} 主元监控 $\|\widetilde{\bm A}^{-1}\|/\|\widetilde{\bm A}\|$；若超过 $10^{12}$ 触发追加展开点。
+\item \textbf{截止处理}：当 $k_0 < k_{c,p}$ 时 $\beta_p$ 变为虚数，$s_p\to 0$。降阶模型必须解析延拓，因此 $\beta_p$ 始终保留 $\sqrt{k_0^2 - k_{c,p}^2}$ 的符号形式并采取主值 sqrt 分支。该行为与现有直接求解器一致（\texttt{powerNormalizationFactor} 在该情形返回 0）。
+\item \textbf{对称性恢复}：浮点扰动可能破坏对称性，构造完成后显式做 $\widetilde{\bm K}\!\gets\!\tfrac12(\widetilde{\bm K}+\widetilde{\bm K}^{\!\top})$。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{与现有代码的对应关系}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.36\linewidth}p{0.6\linewidth}}
+\toprule
+数学对象 & 源码位置 \\
+\midrule
+$\bm K - k_0^2\bm M$ & \texttt{src/fem/FEMAssembler.cpp::assemble}（体装配）\\
+$\im\beta_p\bm m_p\bm m_p^{\!\top}$ & \texttt{src/fem/FEMAssembler.cpp::applyWavePorts}\\
+$\bm m_p$（输出） & \texttt{src/fem/PortModeSolver.cpp::computeMode::couplingWeights}\\
+$s_p(\omega)$ & \texttt{src/fem/PortModeSolver.cpp::powerNormalizationFactor}\\
+$b_p$、$S_{pq}$ & \texttt{src/post/ResultExtractor.cpp::extract / portProjection}\\
+$\bm A(\omega_0)$ 的 PARDISO LU/LDL\textsuperscript{T} & \texttt{src/linalg/MklPardisoSolver.cpp}\\
+CSR 稀疏图复用 & \texttt{src/linalg/SparseMatrix.cpp::createPattern}、\texttt{FEMAssembler::sparsityPattern\_}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+MOR 模块将以新的命名空间 \textcolor{gray}{\texttt{fem::mor}} 引入到 \texttt{src/mor/} 之下，不向上耦合 \texttt{app}；它的输入只有现有的 \texttt{FEMAssembler}、\texttt{PortModeSolver}，以及一个 \texttt{LinearSolver} 抽象。
+
+%---------------------------------------------------------------
+\section{验证策略}
+
+\begin{enumerate}
+\item \textbf{解析校核}：空矩形波导（无损介质体）：$S_{21}(\omega)=\mathrm{e}^{-\im\beta L}$ 解析成立。要求 $L=2,\ q=20$ 的 ROM 在 2:1 带宽内对 $|S|$ 的误差小于 $10^{-6}$。
+\item \textbf{加载 BP 滤波器（本工程基准）}：在 $40$--$43$\,GHz 上，$L=3,\ q=40$ 的 Krylov ROM 与直接 401 点扫频对比：$\rho_S \le 0.05$\,dB。
+\item \textbf{能量守恒}：无源情况下，所有扫频点 ROM 输出应满足 $|S_{11}|^2+|S_{21}|^2 \le 1+10^{-3}$（与现有直接扫频回归项一致）。
+\item \textbf{对 $q$ 的收敛}：在固定 $L$ 下绘制 $\max_\omega \|\widetilde{\bm S}-\bm S\|_F$ 与 $q$ 的关系。预期指数衰减直至饱和。
+\end{enumerate}
+
+%---------------------------------------------------------------
+\section{限制与不在范围之内}
+
+\begin{itemize}
+\item \textbf{强色散}：当前模型对线性 $\sigma$ 损耗精确，对 Debye/Drude 等模型可通过仿射展开处理。具有非有理强 $\varepsilon(\omega)$（例如带尖锐共振的实测表格数据）需要分段有理拟合或采用其它降阶方法（如 AAA + balanced truncation），不在本期范围。
+\item \textbf{强非线性}：不在范围。非迭代 MOR 在这种情形下无意义。
+\item \textbf{阻带内本征模追踪}：ROM 复现传递函数，但不能稳健地识别阻带内的谐振；这一点交给后续独立的 Krylov-Schur 本征求解模块。
+\item \textbf{自适应 hp 与 ROM 协同}：ROM 建立在固定网格与基函数阶上。同一扫频中改 h 或 p 会改变全空间算子，需要把 $\bm V$ 投影到新的 $V_h$，这是后续修订要处理的内容。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{参考文献（非正式）}
+
+\begin{itemize}
+\item Z.\ Bai, ``Krylov subspace techniques for reduced-order modeling of large-scale dynamical systems,'' Appl.\ Numer.\ Math., 2002.
+\item A.\ Odabasioglu, M.\ Celik, L.~T.\ Pileggi, ``PRIMA: passive reduced-order interconnect macromodeling algorithm,'' IEEE T-CAD, 1998.
+\item J.-S.\ Zhao, J.-F.\ Lee, ``A model order reduction technique using Krylov subspace methods for the analysis of microwave circuits,'' IEEE Microw.\ Wireless Compon.\ Lett., 2002.
+\item E.\ Grimme, ``Krylov projection methods for model reduction,'' PhD thesis, Univ.\ of Illinois, 1997.
+\item V.\ de la Rubia, U.\ Razafison, Y.\ Maday, ``Reliable fast frequency sweep for microwave devices via the reduced basis method,'' IEEE TMTT, 2009.
+\end{itemize}
+
+\end{document}

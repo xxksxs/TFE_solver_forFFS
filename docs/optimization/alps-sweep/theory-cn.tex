@@ -1,0 +1,582 @@
+% !TEX program = xelatex
+% 自适应 Lanczos-Padé 扫频 (ALPS) 在频域 FEM Maxwell 问题中的原理与数学模型。
+% 自包含；使用 `xelatex theory-cn.tex` 编译。
+
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\im}{\mathrm{i}}
+\DeclareMathOperator{\range}{range}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Real}{Re}
+\DeclareMathOperator{\Imag}{Im}
+\DeclareMathOperator{\spanop}{span}
+\DeclareMathOperator{\rank}{rank}
+
+\newtheorem{definition}{定义}
+\newtheorem{theorem}{定理}
+\newtheorem{remark}{注}
+\newtheorem{lemma}{引理}
+
+\title{自适应 Lanczos-Padé 快速扫频 (ALPS) \\ 在 FEM 频域 Maxwell 问题中的原理与数学模型}
+\author{BP-FEM 优化路线}
+\date{评审稿}
+
+\floatname{algorithm}{算法}
+\renewcommand{\algorithmicrequire}{\textbf{输入：}}
+\renewcommand{\algorithmicensure}{\textbf{输出：}}
+\renewcommand{\algorithmicreturn}{\textbf{返回}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+%---------------------------------------------------------------
+\section{文档定位}
+
+ALPS（Adaptive Lanczos-Padé Sweep，自适应 Lanczos-Padé 扫频）是计算电磁学领域用于频域 FEM 快速扫频的经典方法。它在 1999 ~ 2002 年由 Zhao、Lee 等人正式提出 \cite{Zhao1999,Lee2002}，与 PRIMA \cite{Odabasioglu1998}、SyMPVL \cite{Freund2000} 同属"Krylov 子空间 + 矩匹配 + 有理插值"家族，但落地路径选择了 \emph{非对称 Lanczos 过程} + \emph{Padé via Lanczos 定理}，从而能直接给出有理传递函数的封闭形式。
+
+本文目的：
+
+\begin{itemize}
+\item 把 ALPS 的连续问题、离散系统、单点矩匹配、多点自适应、误差控制四件事完整推导一遍。
+\item 把所有符号对齐到本工程已有的 BP-FEM 代码（\texttt{FEMAssembler}、\texttt{PortModeSolver}、\texttt{MklPardisoSolver}、\texttt{ResultExtractor}），便于后续若决定落地时直接对照实现。
+\item 与本仓库已有的 \texttt{krylov-mor-sweep/theory-cn.tex} 在第 10 节做明确比对，避免两者被混为一谈或重复实现。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{背景：ALPS 解决的问题}
+
+\subsection{扫频代价瓶颈}
+
+频域 FEM Maxwell 求解的扫频，需要在 $N_f$ 个频率上分别装配 $\bm A(\omega_k)$、做一次直接（PARDISO）或迭代分解、求一次右端，再做端口投影得到 $S$ 参数。每点代价为 $T_{\mathrm{LU}}(n)+T_{\mathrm{solve}}(n)$，对一阶 hierarchical 单元 + $n\!\sim\!10^5$ ~ $10^6$ DOF 的实际工程，通常占据求解全部时间的 95\% 以上。
+
+ALPS 的目标：在不损失（或可控损失）精度的前提下，把 $N_f$ 次直接求解换成"少量分解 + 大量低代价的 Padé 评估"。
+
+\subsection{物理判据为何允许"少分解"}
+
+电磁 FEM 系统矩阵 $\bm A(\omega)$ 关于频率参数（具体地，关于 $s = \im\omega$ 或 $\lambda = k_0^2$）是\emph{低阶有理函数}。其传递函数 $\bm H(\omega) = \bm C \bm A(\omega)^{-1}\bm B$ 因此是有理函数，且阶数远低于 $n$。这给了 \emph{Padé / 有理插值} 思路一个理论根据：用 $q\ll n$ 阶有理函数局部精确近似 $\bm H(\omega)$。
+
+%---------------------------------------------------------------
+\section{连续问题与状态空间形式化}
+
+\subsection{时谐 Maxwell 形式}
+
+设 $\Omega\subset\R^3$，时谐约定 $\mathrm{e}^{+\im\omega t}$。电场满足 curl-curl 方程
+\begin{equation}
+  \nabla\times\!\big(\mu_r^{-1}\nabla\times\bm E\big)
+  -k_0^2\,\varepsilon_c(\omega)\,\bm E = \bm 0,\qquad
+  k_0=\omega/c_0,\quad \varepsilon_c(\omega)=\varepsilon_r-\im\sigma/(\omega\varepsilon_0).
+  \label{eq:strong}
+\end{equation}
+PEC 边界与波端口 / 阻抗 / ABC 边界的处理与 \texttt{FEMAssembler} 当前实现一致（详见仓库 \texttt{primitives/fem.md}）。
+
+\subsection{Galerkin 离散与系统矩阵}
+
+设 $V_h\subset H(\mathrm{curl};\Omega)$ 为 Nedelec/Whitney 棱元空间，全局 DOF 向量记为 $\bm x(\omega)\in\C^n$。装配后得到
+\begin{equation}
+  \boxed{\;
+  \bm A(\omega)\,\bm x(\omega) = \bm f(\omega),\qquad
+  \bm A(\omega) = \bm K - k_0^2\,\bm M
+  + \im\sum_{p=1}^{N_p} \beta_p(\omega)\,\bm m_p \bm m_p^{\!\top}.
+  \;}
+  \label{eq:discrete}
+\end{equation}
+其中 $\bm K,\bm M$ 是实对称稀疏矩阵，$\bm m_p$ 是端口 $\Gamma_p$ 的耦合向量（\texttt{PortModeSolver::computeMode::couplingWeights}），$\beta_p(\omega)=\sqrt{k_0^2-k_{c,p}^2}$ 是端口主模传播常数，$\bm f(\omega)$ 见 \texttt{FEMAssembler::applyWavePorts}。
+
+\subsection{状态空间表示}
+
+把 $\bm A(\omega)$ 中 $\omega$ 的依赖剥离出来，便于后续推导：
+\begin{equation}
+  \bm A(\omega)
+  = \bm A_0 + (s^2 - s_0^2)\,\bm M_s + \sum_{p}\big[\im\beta_p(\omega) - \im\beta_p(\omega_0)\big]\,\bm m_p\bm m_p^{\!\top},
+  \label{eq:expansion}
+\end{equation}
+其中 $s = \im\omega$，$s_0 = \im\omega_0$ 是展开点，$\bm M_s$ 与 $-k_0^2\bm M$ 相对应（仅符号上的整理），$\bm A_0 = \bm A(\omega_0)$。当无端口或仅工作在远离截止频率的频带时，端口贡献可视为 $s$ 的有理项（见第 7 节关于 $\beta_p$ 仿射展开）。把传输函数写成单输入单输出 (SISO) 形式：
+\begin{equation}
+  H(s) = \bm c^{\!\top}\bm A(\omega)^{-1}\bm b,\qquad
+  H(s) \in \C.
+  \label{eq:transfer}
+\end{equation}
+对多端口情形 $\bm c,\bm b$ 替换为矩阵 $\bm C,\bm B$，结论不变（见第 6 节多端口推广）。
+
+%---------------------------------------------------------------
+\section{Padé 近似与矩匹配}
+
+\subsection{Taylor 展开与矩}
+
+把 $\bm A(\omega)^{-1}\bm b$ 在 $s_0$ 周围 Taylor 展开。令 $\bm G = -\bm A_0^{-1}\bm M_s$（左移动算子），$\bm r_0 = \bm A_0^{-1}\bm b$，则
+\begin{equation}
+  \bm A(\omega)^{-1}\bm b
+  = \sum_{k=0}^{\infty} (s-s_0)^{k}\,\bm G^{k}\bm r_0
+  + \mathcal O(\text{端口高阶项}),
+\end{equation}
+传递函数 $H(s)$ 在 $s_0$ 周围的形式幂级数为
+\begin{equation}
+  H(s) = \sum_{k=0}^{\infty} m_k\,(s-s_0)^{k},\qquad
+  m_k = \bm c^{\!\top}\bm G^{k}\bm r_0,
+\end{equation}
+$\{m_k\}$ 称为 $H(s)$ 在 $s_0$ 处的\emph{矩}。直接计算 $m_k$ 数值上极不稳定（$\bm G^k$ 越乘越接近主特征向量），ALPS 不直接用矩，而是用 Lanczos 过程隐式利用它们。
+
+\subsection{Padé 近似定义}
+
+\begin{definition}[{$[L/M]$ Padé 近似}]
+对 $H(s)$ 的形式幂级数，若有理函数
+\(
+  P_L(s)/Q_M(s)
+\)
+（$\deg P_L\le L,\ \deg Q_M\le M,\ Q_M(s_0)=1$）满足
+\(
+  H(s) - P_L(s)/Q_M(s) = \mathcal O\big((s-s_0)^{L+M+1}\big),
+\)
+则称其为 $H(s)$ 在 $s_0$ 处的 $[L/M]$ Padé 近似。
+\end{definition}
+
+矩匹配的物理含义：$P_L/Q_M$ 与 $H(s)$ 共享前 $L+M+1$ 阶 Taylor 系数。对扫频问题最有用的是\emph{对角 Padé}，$L=M=q$，匹配 $2q+1$ 阶矩。
+
+\subsection{为什么不直接构造 Padé}
+
+由矩 $\{m_0,\dots,m_{2q}\}$ 直接构造 Padé 需要解一个 Hankel 系统，该 Hankel 矩阵在 $q\ge 10$ 时迅速病态，造成数值崩溃。Lanczos 过程用三项递推等价构造 Padé 系数，避免显式矩、避免 Hankel 求逆，是 ALPS 区别于早期 AWE \cite{Pillage1990} 的核心改进。
+
+%---------------------------------------------------------------
+\section{Padé via Lanczos：单点 ALPS 推导}
+
+\subsection{非对称 Lanczos 过程}
+
+对一般非对称矩阵 $\bm G$，给定起始向量 $\bm r_0$（右）与 $\bm \ell_0$（左），双正交化的非对称 Lanczos 过程构造两组 Krylov 基：
+\begin{align}
+  \mathcal K_q^{(R)} &= \spanop\{\bm r_0,\bm G\bm r_0,\dots,\bm G^{q-1}\bm r_0\},\\
+  \mathcal K_q^{(L)} &= \spanop\{\bm \ell_0,\bm G^{\!\top}\bm \ell_0,\dots,(\bm G^{\!\top})^{q-1}\bm \ell_0\}.
+\end{align}
+通过三项递推得到双正交基矩阵 $\bm V_q\in\C^{n\times q}$、$\bm W_q\in\C^{n\times q}$，满足
+\begin{equation}
+  \bm W_q^{\!\top}\bm V_q = \bm I_q,\qquad
+  \bm G\,\bm V_q = \bm V_q\,\bm T_q + \delta_q\,\bm v_{q+1}\bm e_q^{\!\top},
+\end{equation}
+其中 $\bm T_q\in\C^{q\times q}$ 是\emph{三对角}矩阵：
+\begin{equation}
+  \bm T_q = \begin{pmatrix}
+  \alpha_1 & \beta_1 \\
+  \gamma_1 & \alpha_2 & \beta_2 \\
+   & \gamma_2 & \ddots & \ddots \\
+   & & \ddots & \alpha_{q-1} & \beta_{q-1}\\
+   & & & \gamma_{q-1} & \alpha_q
+  \end{pmatrix}.
+  \label{eq:tridiag}
+\end{equation}
+
+\begin{algorithm}[h]
+\caption{非对称 Lanczos 过程（实现要点）}
+\label{alg:lanczos}
+\begin{algorithmic}[1]
+\Require 算子 $\bm G$、起始向量 $\bm r_0$、$\bm \ell_0$，最大阶 $q_{\max}$
+\State 归一化使得 $\bm \ell_1^{\!\top}\bm v_1 = 1$；$\bm v_0 \gets 0,\ \bm w_0\gets 0$，$\beta_0\gets 0,\ \gamma_0\gets 0$
+\For{$j=1,\dots,q_{\max}$}
+  \State $\hat{\bm v} \gets \bm G\,\bm v_j - \beta_{j-1}\bm v_{j-1}$
+  \State $\hat{\bm w} \gets \bm G^{\!\top}\,\bm w_j - \gamma_{j-1}\bm w_{j-1}$
+  \State $\alpha_j \gets \bm w_j^{\!\top}\hat{\bm v}$
+  \State $\hat{\bm v}\gets \hat{\bm v}-\alpha_j\bm v_j$；\quad $\hat{\bm w}\gets \hat{\bm w}-\alpha_j\bm w_j$
+  \State 选 $\beta_j,\gamma_j$ 使 $\beta_j\gamma_j = \bm w_{j+1}^{\!\top}\hat{\bm v}$，常用 $\beta_j = \|\hat{\bm v}\|_2,\ \gamma_j = \bm w_{j+1}^{\!\top}\hat{\bm v}/\beta_j$
+  \State $\bm v_{j+1}\gets \hat{\bm v}/\beta_j$；\quad $\bm w_{j+1}\gets \hat{\bm w}/\gamma_j$
+  \State 必要时执行选择性再正交化（look-ahead）以避免击穿
+\EndFor
+\State \Return $\bm V_q = [\bm v_1,\dots,\bm v_q]$，$\bm W_q$，$\bm T_q$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Padé via Lanczos 定理}
+
+\begin{theorem}[Padé via Lanczos \cite{Gragg1974,Freund1995}]
+\label{thm:padelanczos}
+设 $\bm v_1 = \bm r_0/\|\bm r_0\|$，$\bm \ell_1 = \bm c/\bm c^{\!\top}\bm r_0$（合适缩放）。则非对称 Lanczos 三对角化 $\bm G\to \bm T_q$ 构造的有理函数
+\begin{equation}
+  \widetilde H_q(s) \,=\, \big(\bm c^{\!\top}\bm r_0\big)\,\bm e_1^{\!\top}\big[\bm I_q + (s-s_0)\,\bm T_q\big]^{-1}\bm e_1
+  \label{eq:pade-lanczos}
+\end{equation}
+是 $H(s)$ 在 $s_0$ 处的 $[q-1/q]$ Padé 近似，且匹配前 $2q$ 阶矩。
+\end{theorem}
+
+\begin{remark}
+关键点：$\widetilde H_q(s)$ 的极点是 $\bm T_q$ 的特征值的简单变换；$q$ 远小于 $n$，因此 $\widetilde H_q(s)$ 的所有极点-留数对可\emph{显式}求出。这是 ALPS 区别于 Krylov-Galerkin MOR 的关键：
+\begin{itemize}
+\item Krylov MOR：在线评估时仍要解 $q\times q$ 复对称线性系统。
+\item ALPS：把 $\widetilde H_q$ 写为极点-留数和，每个频点只是常数时间评估。
+\end{itemize}
+\end{remark}
+
+\subsection{极点-留数表示}
+
+对 $\bm T_q$ 做特征分解 $\bm T_q = \bm S_q\,\bm \Lambda_q\,\bm S_q^{-1}$，$\bm\Lambda_q = \diag(\theta_1,\dots,\theta_q)$。代入 \eqref{eq:pade-lanczos}：
+\begin{equation}
+  \widetilde H_q(s)
+  = \big(\bm c^{\!\top}\bm r_0\big)\sum_{k=1}^{q}\frac{\rho_k}{1+(s-s_0)\,\theta_k},\qquad
+  \rho_k = \big[\bm S_q^{-1}\bm e_1\big]_k\,\big[\bm e_1^{\!\top}\bm S_q\big]_k.
+  \label{eq:pole-residue}
+\end{equation}
+这一表达式给出明确的物理解释：$\theta_k$ 对应电磁系统的"近似谐振"或"近似传输零点/极点"，$\rho_k$ 是它们对端口耦合的留数权重。
+
+%---------------------------------------------------------------
+\section{多端口与多激励}
+
+对 $N_p$ 端口情形，$\bm B,\bm C\in\C^{n\times N_p}$，传递函数变为矩阵
+\(
+  \bm H(s) = \bm C^{\!\top}\bm A(\omega)^{-1}\bm B.
+\)
+ALPS 推广到块版本（block Lanczos）：
+\begin{itemize}
+\item 起始块 $\bm V_1 = \bm A_0^{-1}\bm B$ 经过经济 QR 后作为 $q_1$ 列右起始基。
+\item 左起始块取 $\bm W_1 = \bm A_0^{-\top}\bm C$ 同样 QR 后再缩放使 $\bm W_1^{\!\top}\bm V_1 = \bm I_{N_p}$。
+\item 三对角化变为\emph{块三对角化}，每"块"为 $N_p\times N_p$ 子矩阵。
+\item Padé via Lanczos 推广为矩阵 Padé：$[\bm I_q + (s-s_0)\bm T_q]^{-1}$ 中 $\bm T_q\in\C^{qN_p\times qN_p}$。
+\end{itemize}
+矩匹配阶数仍是 $2q$，但每阶配 $N_p^2$ 个矩。这与本工程典型的 2 端口波导设备一致（\texttt{ProjectDefinition::ports.size() == 2}）。
+
+%---------------------------------------------------------------
+\section{端口频率依赖的处理}
+
+\subsection{端口项的额外频率依赖}
+
+\eqref{eq:discrete} 中端口项 $\im\beta_p(\omega)\bm m_p\bm m_p^{\!\top}$ 的 $\beta_p(\omega)$ 是 $\omega$ 的非有理函数（开根号）。直接 Padé 在传输零点附近会失真。两条工程化处理：
+
+\paragraph{方案 P1：仿射近似 $\beta_p$。}
+在展开点 $\omega_0$ 周围把 $\beta_p$ 一阶近似：
+\begin{equation}
+  \beta_p(\omega) \approx \beta_p(\omega_0) + \beta_p'(\omega_0)(\omega-\omega_0)
+  = \beta_p(\omega_0) + \frac{k_0\,k_0'}{\beta_p(\omega_0)}(\omega-\omega_0).
+\end{equation}
+然后把 $\bm A(\omega)$ 写成 $\bm A_0 + (s-s_0)\bm A_1 + (s-s_0)^2\bm A_2$ 的二次多项式形式，进行二阶 Lanczos（即所谓 \emph{quadratic Padé}，对应 SyMPVL 风格）。
+
+\paragraph{方案 P2：$\beta_p$ 严格保留 + 残差校正。}
+保持 $\beta_p$ 完整公式，把端口项放进 \emph{Lanczos-Padé 残差校正项}（详见 §8.3）。
+
+ALPS 在不同实现中两种都常见。本工程的 BP 滤波器示例工作在远离 WR-22 截止频率的 40 ~ 43 GHz，方案 P1 即可。
+
+\subsection{截止频率附近的退化}
+
+当 $k_0\to k_{c,p}^{+}$ 时 $\beta_p\to 0$，端口模无法传播，$\bm A(\omega)$ 接近秩亏。Padé 函数会在该频率附近出现错误极点。ALPS 通常通过：
+\begin{itemize}
+\item 把扫频带分割为"远离截止"与"靠近截止"两段，分别用展开点。
+\item 或者把 $\beta_p$ 保持为 $\sqrt{k_0^2-k_{c,p}^2}$ 的解析延拓（主值 sqrt），让降阶模型继承同样的分支切。
+\end{itemize}
+具体处理与 \texttt{powerNormalizationFactor} 在 cutoff 处返回 0 的当前实现保持一致。
+
+%---------------------------------------------------------------
+\section{自适应多展开点 ALPS}
+
+\subsection{动机}
+
+单点 Padé 在 $|s-s_0|$ 较大时收敛速度退化。Padé 近似的有效带宽常被估计为
+\begin{equation}
+  |s-s_0|\,\rho(\bm G) \lesssim 1,
+\end{equation}
+$\rho(\bm G)$ 是 $\bm G$ 的谱半径。当扫频带宽超过此范围，单点不够用，需要在扫频带内布置多个展开点 $\{s_0^{(\ell)}\}_{\ell=1}^{L}$，每个点构造对应的 $\widetilde H_{q_\ell}^{(\ell)}(s)$，再通过\emph{光滑拼接}（典型作法是按距离最近的展开点选择）得到全频带响应。
+
+\subsection{自适应布置展开点}
+
+ALPS 的 \emph{adaptive} 体现在把 $L$ 与每个 $q_\ell$ 的选择交给残差驱动的策略：
+
+\begin{algorithm}[h]
+\caption{自适应 ALPS 扫频}
+\label{alg:adaptive-alps}
+\begin{algorithmic}[1]
+\Require 扫频带 $[\omega_a,\omega_b]$，目标容差 $\varepsilon_S$，每点最大阶 $q_{\max}$，最大展开点数 $L_{\max}$
+\State 选初始展开点集 $\Sigma = \{\omega_a, (\omega_a+\omega_b)/2, \omega_b\}$
+\State 对每个 $\omega_0^{(\ell)} \in \Sigma$：因式分解 $\bm A_0^{(\ell)}$，运行块 Lanczos 至 $q_\ell$ 步
+\State 对每个 ROM 评估极点-留数 \eqref{eq:pole-residue}，得到全局 $\widetilde S(\omega)$（按距离最近展开点选择）
+\Repeat
+  \State 在密集探针集 $\Omega_p\subset[\omega_a,\omega_b]$ 上估计残差 $\rho(\omega)$（见 §8）
+  \State $\omega^\star \gets \arg\max_{\omega\in\Omega_p} \rho(\omega)$
+  \If{$\rho(\omega^\star) > \varepsilon_S$ 且 $|\Sigma| < L_{\max}$}
+    \State 把 $\omega^\star$ 加入 $\Sigma$，分解 $\bm A_0(\omega^\star)$，运行块 Lanczos 直到内部残差或 $q_{\max}$
+  \Else
+    \State \textbf{break}
+  \EndIf
+\Until{}
+\State \Return 各展开点的 $\bm T_{q_\ell}^{(\ell)}$、$\bm S_{q_\ell}^{(\ell)}$、留数 $\{\rho_k^{(\ell)}\}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{过渡区的拼接策略}
+
+最简单的拼接是按"距离最近展开点"指派每个频率到一个 ROM。更精细的策略：
+\begin{itemize}
+\item 在两个 ROM 公共邻域里取 \emph{重叠均值} $\widetilde S(\omega) = \tau\,\widetilde S^{(\ell)}(\omega) + (1-\tau)\widetilde S^{(\ell+1)}(\omega)$，$\tau$ 是平滑过渡函数。
+\item 或在过渡区监控两个 ROM 的差异 $|\widetilde S^{(\ell)}-\widetilde S^{(\ell+1)}|$；若超过阈值，直接在过渡区中点新增展开点。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{误差与稳定性指示器}\label{sec:residual}
+
+\subsection{(R1) 代数残差}
+$\widetilde H_q(s)$ 的有效性可通过把 $\widetilde{\bm x}(\omega)\in\C^q$ 抬升回全空间检验：
+\begin{equation}
+  \widetilde{\bm x}_n(\omega) = \bm V_q\,[\bm I_q + (s-s_0)\bm T_q]^{-1}\bm e_1\,\|\bm r_0\|,\qquad
+  \rho_{\mathrm{alg}}(\omega) = \frac{\|\bm A(\omega)\widetilde{\bm x}_n(\omega) - \bm b\|_2}{\|\bm b\|_2}.
+\end{equation}
+该指示器只需一次 SpMV，廉价。
+
+\subsection{(R2) Lanczos 内部诊断}
+ALPS 自带"Lanczos 残差范数"$\beta_q\gamma_q$。当其下降到 $10^{-12}$ 量级，意味着 ROM 已经"饱和"，可停止 Lanczos 迭代；若反弹（\emph{ghost eigenvalue}），需要 look-ahead 或重新展开。
+
+\subsection{(R3) S 参数验证}
+在小型验证频点集 $\Omega_v$ 上调用现有直接求解器，比较 $\|\widetilde S(\omega)-S(\omega)\|_F$。这是用户级的合同。
+
+\subsection{Lanczos 击穿与 look-ahead}
+
+非对称 Lanczos 在 $\bm w_{j+1}^{\!\top}\hat{\bm v} = 0$ 时数值"击穿"，即使 $\bm V,\bm W$ 没真的耗尽 Krylov 子空间。商业级 ALPS 实现需要 \emph{look-ahead Lanczos}（Parlett-Taylor-Liu 1985；Freund-Gutknecht-Nachtigal 1993），允许临时使用 $2\times 2$ 或更大块替代单步三项递推，跨过击穿。
+
+%---------------------------------------------------------------
+\section{ALPS 与 Krylov-Galerkin MOR 的关系}\label{sec:vs-mor}
+
+为避免与本仓库 \texttt{krylov-mor-sweep/theory-cn.tex} 重复或混淆，明确列出两者关系：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.3\linewidth}p{0.32\linewidth}p{0.32\linewidth}}
+\toprule
+& Krylov MOR (PRIMA 风格) & ALPS \\
+\midrule
+基底构造 & 块 Arnoldi（自共轭/Galerkin） & 非对称 Lanczos（Petrov-Galerkin） \\
+ROM 形式 & $\widetilde{\bm A}(\omega)\in\C^{q\times q}$，每频点解小线性系统 & $\widetilde H_q(s)$ 极点-留数和，每频点常数时间评估 \\
+矩匹配阶 & 单点 $2q$ & 单点 $2q$；多点同 \\
+对称性保持 & 自然保持复对称 & 不保持，需要额外对称化或 SyMPVL 变体 \\
+高维存储 & $\bm V\in\C^{n\times q}$ & $\bm V_q,\bm W_q\in\C^{n\times q}$（两份） \\
+故障模式 & ROM 病态 → 残差爆炸 & 击穿 → 需 look-ahead \\
+工程成熟度 & 商业广泛（CST、HFSS 部分扫频） & 商业广泛（HFSS Interpolating Sweep 历史源头） \\
+\bottomrule
+\end{tabular}
+\caption{ALPS 与 Krylov-Galerkin MOR 的对比。}
+\end{table}
+
+实现层面，两者完全可以共享同一份 \texttt{FullSpaceSolver}（PARDISO/迭代）抽象与同一份 \texttt{AffineOperator}（仿射展开缓存）；区别仅在于：
+\begin{itemize}
+\item Krylov MOR 维护 \emph{右子空间 $\bm V$} 与 \emph{投影矩阵 $\widetilde{\bm A}_i$}。
+\item ALPS 维护 \emph{双子空间 $\bm V_q,\bm W_q$} 与 \emph{三对角矩阵 $\bm T_q$}（外加显式特征分解给极点-留数）。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{与现有代码的对应关系}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.36\linewidth}p{0.6\linewidth}}
+\toprule
+数学对象 & 源码位置 / 说明 \\
+\midrule
+$\bm K - k_0^2\bm M$ & \texttt{src/fem/FEMAssembler.cpp::assemble}（体装配）\\
+$\im\beta_p\bm m_p\bm m_p^{\!\top}$ & \texttt{src/fem/FEMAssembler.cpp::applyWavePorts}\\
+$\bm m_p$（$\bm B$ 的列） & \texttt{src/fem/PortModeSolver.cpp::computeMode::couplingWeights}\\
+$\bm c$ / $\bm C$（输出） & 同 $\bm m_p$，转置；详见 \texttt{src/post/ResultExtractor.cpp::portProjection}\\
+$\bm A_0$ 的 PARDISO LU & \texttt{src/linalg/MklPardisoSolver.cpp}（每个展开点一次）\\
+$\bm G\bm v = -\bm A_0^{-1}\bm M\bm v$ & 等价为：调用 PARDISO 解 $\bm A_0\bm w = \bm M\bm v$，再取负\\
+CSR 稀疏图复用 & \texttt{src/linalg/SparseMatrix.cpp::createPattern}、\texttt{FEMAssembler::sparsityPattern\_}\\
+$\beta_p(\omega)$ & 参考 \texttt{src/fem/PortModeSolver.cpp::poyntingPowerIntegral}\\
+S 参数评估 & \texttt{src/post/ResultExtractor.cpp::extract}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+若决定落地，建议把 ALPS 与 Krylov MOR 共同放进新的 \texttt{src/mor/} 名空间下：
+
+\begin{itemize}
+\item \texttt{include/bpfem/mor/FullSpaceSolver.hpp}（共享）
+\item \texttt{include/bpfem/mor/AffineOperator.hpp}（共享）
+\item \texttt{include/bpfem/mor/KrylovMorSweep.hpp}（已规划）
+\item \texttt{include/bpfem/mor/AlpsSweep.hpp}（本文档对应）
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{代价分析}
+
+记 $n$ = 全空间 DOF，$q$ = 单点 ROM 阶，$L$ = 展开点数，$N_f$ = 扫频点数，$N_v$ = 验证点数，$N_p$ = 端口数。
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+阶段 & 直接扫频 & ALPS \\
+\midrule
+装配 & $N_f T_{\mathrm{asm}}(n)$ & $L\,T_{\mathrm{asm}}(n)$ + 仿射缓存 \\
+$\bm A_0^{(\ell)}$ 因式分解 & $N_f T_{\mathrm{LU}}(n)$ & $L\,T_{\mathrm{LU}}(n)$ \\
+Lanczos 迭代 & 0 & $L\,q\,N_p\,T_{\mathrm{solve}}(n)$ \\
+极点-留数（$\bm T_q$ 特征分解） & 0 & $L\cdot \mathcal O(q^3 N_p^3)$ \\
+每频点在线评估 & 0 & $\mathcal O(q\,N_p^2)$（极点-留数和）\\
+验证 & 0 & $N_v T_{\mathrm{LU}}(n)$ \\
+\bottomrule
+\end{tabular}
+\caption{ALPS 与直接扫频的渐近代价对比。}
+\end{table}
+
+对本工程基准：$n=2.9\!\times\!10^5$、$N_f=401$、$L=2$ ~ $3$、$q=30$ ~ $50$、$N_p=2$。
+\(
+  \text{加速比} \;\sim\; N_f / (L + N_v) \;\sim\; 401/8 \approx 50.
+\)
+ALPS 的"在线评估代价比 Krylov MOR 略低"（极点-留数 $\mathcal O(q)$ 评估，无需小线性系统求解），但离线阶段需要保留两份 $\bm V_q,\bm W_q$，内存约多 1 倍。
+
+%---------------------------------------------------------------
+\section{数值安全保障}
+
+\begin{itemize}
+\item \textbf{look-ahead Lanczos}：捕捉击穿，跨步 $\beta_j\gamma_j$ 接近 0 的情况。
+\item \textbf{Bi-orthogonality 监控}：$\|\bm W_q^{\!\top}\bm V_q - \bm I_q\|_F$ 超过 $10^{-8}$ 时触发再正交化。
+\item \textbf{Padé 极点筛选}：$\widetilde H_q(s)$ 的有些 $\theta_k$ 是数值伪极点（spurious pole）。Krylov-Schur 风格的"残差标尺"或者把扫频带外的极点剔除，可以提升带内精度。
+\item \textbf{符号一致性}：与 Krylov MOR 一样，端口项中的 $\beta_p$ 必须用主值 sqrt，与 \texttt{powerNormalizationFactor} 一致。
+\item \textbf{对称化恢复}：本工程 $\bm K,\bm M$ 实对称，$\bm G = -\bm A_0^{-1}\bm M$ 一般非对称，但 SyMPVL 形式可以利用对称性把双 Krylov 退化为单 Krylov，节省一半的全空间求解（参见 \cite{Freund2000}）。落地时建议用 SyMPVL 而非通用非对称 Lanczos。
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{适用范围与限制}
+
+\subsection{适用}
+
+\begin{itemize}
+\item 中心频带工作的微波器件（滤波器、耦合器、E/T 接头），扫频带宽不超过 1 ~ 2 个倍频程。
+\item 端口数 $N_p \le 8$ ~ $10$ 的设备。
+\item 材料模型 $\varepsilon_c(\omega)$ 是有理函数（包括标量损耗、Debye、Drude 极）。
+\end{itemize}
+
+\subsection{不适用 / 谨慎使用}
+
+\begin{itemize}
+\item 跨多个谐振、多个传输零点的超宽带扫频：单点 Padé 失效，多点 ALPS 也需要密集展开。
+\item 截止频率附近：$\beta_p\to 0$ 引入分支切，建议把扫频带分段。
+\item 非有理强色散材料（如表格化测量数据带尖锐共振）：需要先把 $\varepsilon(\omega)$ 拟合为有理函数，否则 Padé 模型失真。
+\item 强非线性问题：完全不适用，ALPS 是 LTI 方法。
+\end{itemize}
+
+\subsection{与 \texttt{krylov-mor-sweep} 的选择建议}
+
+\begin{itemize}
+\item \textbf{优先 Krylov MOR}：
+  \begin{itemize}
+  \item 端口数较多 ($N_p \ge 4$)：投影 ROM 在多端口 / 多激励下数值更稳。
+  \item 期望保持复对称性 / 与 PARDISO LDL\textsuperscript{T} 直接复用。
+  \item 实现优先级：与 PRIMA / SyMPVL 等同源，框架更便于扩展到 hp 自适应 / 未来 DDM。
+  \end{itemize}
+\item \textbf{优先 ALPS}：
+  \begin{itemize}
+  \item 端口数较少 ($N_p \le 2$)，扫频频点数极多（$N_f > 1000$）：极点-留数评估常数时间，比解 $q\times q$ 系统更快。
+  \item 用户希望直接得到\emph{有理传递函数模型}（极点-留数）做电路联仿、谐振辨识。
+  \item 已经存在 SyMPVL / Lanczos 实现可以复用。
+  \end{itemize}
+\end{itemize}
+
+%---------------------------------------------------------------
+\section{结论}
+
+ALPS 通过"非对称（块）Lanczos 三项递推"隐式生成 $H(s)$ 的 $[q-1/q]$ Padé 近似，再借助三对角矩阵 $\bm T_q$ 的特征分解输出"极点-留数"形式的有理传递函数。它的核心优势：
+
+\begin{itemize}
+\item \textbf{在线评估 $\mathcal O(q)$}：无需在线小线性系统求解，比 Krylov-Galerkin MOR 在大 $N_f$ 下更快。
+\item \textbf{有理形式直接可用}：极点-留数模型可直接喂入电路求解器或谐振辨识工具。
+\item \textbf{矩匹配明确}：单点 $2q$ 阶矩匹配，多点拼接简单可解释。
+\end{itemize}
+
+主要代价：双 Krylov 双倍内存、需要 look-ahead 处理击穿、不保持矩阵复对称结构。在对内存敏感或希望与 PARDISO LDL\textsuperscript{T} 强耦合的工程中，应优先考虑 \texttt{krylov-mor-sweep} 中的 PRIMA 风格 Galerkin MOR；当扫频点数极多、端口数少、希望显式得到有理模型时，ALPS 仍然是首选。
+
+%---------------------------------------------------------------
+\section{符号表}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+符号 & 含义 & 维度 / 类型 \\
+\midrule
+$\Omega$ & FEM 求解区域 & $\subset \R^3$ \\
+$\Gamma_p$ & 第 $p$ 个端口面 & $\subset \partial\Omega$ \\
+$N_p$ & 端口数 & 整数 \\
+$\omega,s$ & 角频率，$s = \im\omega$ & 标量 \\
+$\omega_0,s_0$ & 单点 ALPS 的展开点 & 标量 \\
+$k_0,k_{c,p}$ & 自由空间波数与端口截止波数 & 标量 \\
+$\beta_p(\omega)$ & 端口主模传播常数 $\sqrt{k_0^2-k_{c,p}^2}$ & 标量 \\
+$\bm A(\omega)$ & 全空间 FEM 系统矩阵 & $\C^{n\times n}$ \\
+$\bm K,\bm M$ & 刚度 / 质量矩阵 & $\R^{n\times n}$ 实对称稀疏 \\
+$\bm m_p$ & 端口耦合向量 & $\C^{n}$ 稀疏 \\
+$\bm B,\bm C$ & 输入 / 输出矩阵 & $\C^{n\times N_p}$ \\
+$\bm G = -\bm A_0^{-1}\bm M$ & 移动算子 & $\C^{n\times n}$ 隐式（不显式构造） \\
+$\bm V_q,\bm W_q$ & 右 / 左 Lanczos 基矩阵 & $\C^{n\times q}$ \\
+$\bm T_q$ & 三对角投影矩阵 & $\C^{q\times q}$ \\
+$\theta_k$ & $\bm T_q$ 的特征值（ROM 极点的逆移动） & 复标量 \\
+$\rho_k$ & 留数 & 复标量 \\
+$\widetilde H_q(s)$ & ALPS 给出的 Padé 近似 & 复有理函数 \\
+$L$ & 展开点数 & 整数 \\
+$q,q_\ell$ & 单点 / 展开点 $\ell$ 的 ROM 阶 & 整数 \\
+$N_f,N_v$ & 扫频点数 / 验证点数 & 整数 \\
+$\rho_{\mathrm{alg}},\rho_S$ & 代数残差 / S 参数误差指示器 & 标量 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%---------------------------------------------------------------
+\section{参考文献}
+
+\begin{thebibliography}{9}
+
+\bibitem{Pillage1990}
+L.\ T.\ Pillage, R.\ A.\ Rohrer,
+``Asymptotic waveform evaluation for timing analysis,''
+\emph{IEEE Trans.\ Computer-Aided Design}, vol.\ 9, no.\ 4, pp.\ 352--366, 1990.
+
+\bibitem{Gragg1974}
+W.\ B.\ Gragg,
+``Matrix interpretations and applications of the continued fraction algorithm,''
+\emph{Rocky Mountain J.\ Math.}, vol.\ 4, pp.\ 213--225, 1974.
+
+\bibitem{Freund1995}
+R.\ W.\ Freund, M.\ Hochbruck,
+``On the use of two QMR algorithms to solve singular and non-Hermitian linear systems,''
+\emph{Numer.\ Linear Algebra Appl.}, vol.\ 2, pp.\ 333--361, 1995.
+
+\bibitem{Odabasioglu1998}
+A.\ Odabasioglu, M.\ Celik, L.\ T.\ Pileggi,
+``PRIMA: Passive reduced-order interconnect macromodeling algorithm,''
+\emph{IEEE Trans.\ Computer-Aided Design}, vol.\ 17, pp.\ 645--654, 1998.
+
+\bibitem{Zhao1999}
+J.-S.\ Zhao, J.-F.\ Lee,
+``A fast frequency sweep technique using the Asymptotic Waveform Evaluation method and the Pad\'e via Lanczos algorithm,''
+\emph{ACES Journal}, vol.\ 14, no.\ 1, pp.\ 91--102, 1999.
+
+\bibitem{Lee2002}
+J.-F.\ Lee, D.-K.\ Sun,
+``$p$-Type multiplicative Schwarz method with vector finite elements for modeling of three-dimensional waveguide discontinuities,''
+\emph{IEEE Trans.\ Microwave Theory Tech.}, 2003.
+
+\bibitem{Freund2000}
+R.\ W.\ Freund,
+``Krylov-subspace methods for reduced-order modeling in circuit simulation,''
+\emph{J.\ Comput.\ Appl.\ Math.}, vol.\ 123, pp.\ 395--421, 2000.
+
+\bibitem{ParlettTaylorLiu1985}
+B.\ N.\ Parlett, D.\ R.\ Taylor, Z.\ A.\ Liu,
+``A look-ahead Lanczos algorithm for unsymmetric matrices,''
+\emph{Math.\ Comp.}, vol.\ 44, pp.\ 105--124, 1985.
+
+\bibitem{Bai2002}
+Z.\ Bai,
+``Krylov subspace techniques for reduced-order modeling of large-scale dynamical systems,''
+\emph{Appl.\ Numer.\ Math.}, vol.\ 43, pp.\ 9--44, 2002.
+
+\bibitem{deLaRubia2009}
+V.\ de la Rubia, U.\ Razafison, Y.\ Maday,
+``Reliable fast frequency sweep for microwave devices via the reduced basis method,''
+\emph{IEEE Trans.\ Microwave Theory Tech.}, 2009.
+
+\end{thebibliography}
+
+\end{document}
