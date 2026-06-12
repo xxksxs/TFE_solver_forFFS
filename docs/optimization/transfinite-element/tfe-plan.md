@@ -118,7 +118,7 @@ CMakeLists.txt                                             # 加 src/apm + src/t
 `S Parameter Plot 1.csv` 是 HFSS 用 TFE 端口在该 BP 滤波器上扫频得到的参考曲线（`mag(S(1,1))` / `mag(S(2,1))`，101 个频点 40–43 GHz）。比较脚本 `scripts/compare_with_hfss.py` 接受任意多个 solver run 标签并叠加绘图：
 
 ```powershell
-C:\Users\82061\miniconda3\python.exe scripts\compare_with_hfss.py `
+python scripts\compare_with_hfss.py `
     "S Parameter Plot 1.csv" `
     results_compare `
     --solver "APM=results_apm\s_parameters.csv" `

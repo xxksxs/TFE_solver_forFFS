@@ -13,7 +13,7 @@ import numpy as np
 
 
 def main() -> None:
-    p = Path(r"C:\Users\82061\Desktop\TFE-Direct-2\example\bp_filter\current.ngmesh")
+    p = Path(__file__).resolve().parents[1] / "current.ngmesh"
     text = p.read_text(encoding="utf-8", errors="ignore")
 
     # Coordinates are stored in METERS in the file body (the file declares
