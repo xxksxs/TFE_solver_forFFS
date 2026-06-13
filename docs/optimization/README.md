@@ -24,6 +24,7 @@
 - **`boundary-and-excitations.md`**：PMC / ABC / PML / 周期 / 集总端口 / 平面波 / 电压源。
 - **`materials.md`**：各向异性、色散、铁氧体、薄层、非线性、温度相关。
 - **`solvers-and-sweeps.md`**：AMS/HX/AMG/DDM/FETI、AWE/Krylov MOR、本征/特征模。
+- **`awe-family/README.md`**：AWE、MGAWE、WCAWE 的算法 skill、模块边界与统一校验方法。
 - **`parallelism-and-performance.md`**：OpenMP / TBB / MPI / GPU / I/O / cache。
 - **`geometry-and-mesh.md`**：CAD 导入、网格生成器、曲面/曲边、非协调网格。
 - **`post-processing.md`**：Touchstone、远场、近场、Q、群时延、RCS、表面电流。
@@ -39,6 +40,7 @@
 - **`strategy-interfaces/api.md`**：四个抽象接口的契约说明（参数、调用顺序、错误模型）。
 - **`strategy-interfaces/example.md`**：加新策略的完整示例（以 ImpedanceBC 为例）。
 - **`alps-sweep/plan.md`**：单点 ALPS Krylov MOR。**已落地**。
+- **`awe-family/README.md`**：AWE / MGAWE / WCAWE 快速扫频算法族。**设计中**。
 - **`analytic-port/plan.md`**：解析端口模 (APM)。**已落地**。
 - **`transfinite-element/tfe-plan.md`**：超限元数值多模端口 (TFE)。**已落地**。
 

@@ -7,7 +7,10 @@ namespace fem {
 
 enum class SweepStrategy {
     Direct,  // legacy per-frequency direct solve
-    Alps     // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)
+    Alps,    // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)
+    Awe,     // Asymptotic Waveform Evaluation (single-point Padé MVP)
+    Mgawe,   // Multipoint Galerkin AWE (global reduced basis)
+    Wcawe    // Well-Conditioned AWE (orthogonalized moment basis)
 };
 
 enum class PortMethod {
@@ -64,6 +67,14 @@ struct Options {
     SweepStrategy sweepStrategy = SweepStrategy::Direct;
     int alpsKrylovOrder = 30;             // q per port; ROM dim ~ Np * q after deflation
     double alpsExpansionFrequencyHz = 0.0;  // 0 means "use band center"
+    int aweOrder = 8;                       // q for [q-1/q] Padé
+    double aweExpansionFrequencyHz = 0.0;   // 0 means "use band center"
+    int mgawePointCount = 3;                // number of expansion points
+    int mgaweOrder = 8;                     // local moment count per expansion point
+    double mgaweDropTolerance = 1.0e-10;    // global basis deflation threshold
+    int wcaweOrder = 12;                    // target well-conditioned basis size
+    double wcaweExpansionFrequencyHz = 0.0; // 0 means "use band center"
+    double wcaweDropTolerance = 1.0e-12;    // R diagonal / MGS deflation threshold
 
     // Port-mode construction strategy. Default = Numerical (2D H(curl)
     // eigensolve on the port face mesh). Use Analytic only when an exact

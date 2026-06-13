@@ -32,9 +32,33 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fem {
+
+namespace {
+
+double bytesToMb(std::size_t bytes) {
+    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+std::vector<PhaseSummary> collectPhaseSummaries(const Logger& log) {
+    std::vector<PhaseSummary> out;
+    const auto snapshots = log.phaseSnapshots();
+    out.reserve(snapshots.size());
+    for (const auto& p : snapshots) {
+        PhaseSummary s;
+        s.name = p.name;
+        s.elapsedSec = p.elapsedSec;
+        s.endCurrentMb = p.endMem.currentBytes > 0 ? bytesToMb(p.endMem.currentBytes) : 0.0;
+        s.endPeakMb = p.endMem.peakBytes > 0 ? bytesToMb(p.endMem.peakBytes) : 0.0;
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+}  // namespace
 
 // Parse the bp_fem_solver command line into an Options struct. Each option
 // takes either zero or one value (`--flag` vs `--flag <value>`), with the
@@ -84,8 +108,14 @@ Options parseOptions(int argc, char** argv) {
                 options.sweepStrategy = SweepStrategy::Direct;
             } else if (mode == "alps") {
                 options.sweepStrategy = SweepStrategy::Alps;
+            } else if (mode == "awe") {
+                options.sweepStrategy = SweepStrategy::Awe;
+            } else if (mode == "mgawe") {
+                options.sweepStrategy = SweepStrategy::Mgawe;
+            } else if (mode == "wcawe") {
+                options.sweepStrategy = SweepStrategy::Wcawe;
             } else {
-                throw std::runtime_error("--sweep must be 'direct' or 'alps'");
+                throw std::runtime_error("--sweep must be 'direct', 'alps', 'awe', 'mgawe', or 'wcawe'");
             }
         } else if (arg == "--alps-krylov-order") {
             options.alpsKrylovOrder = std::stoi(requireValue(arg));
@@ -96,6 +126,46 @@ Options parseOptions(int argc, char** argv) {
             options.alpsExpansionFrequencyHz = std::stod(requireValue(arg));
             if (options.alpsExpansionFrequencyHz <= 0.0) {
                 throw std::runtime_error("--alps-expansion must be > 0 Hz");
+            }
+        } else if (arg == "--awe-order") {
+            options.aweOrder = std::stoi(requireValue(arg));
+            if (options.aweOrder < 1) {
+                throw std::runtime_error("--awe-order must be >= 1");
+            }
+        } else if (arg == "--awe-expansion") {
+            options.aweExpansionFrequencyHz = std::stod(requireValue(arg));
+            if (options.aweExpansionFrequencyHz <= 0.0) {
+                throw std::runtime_error("--awe-expansion must be > 0 Hz");
+            }
+        } else if (arg == "--mgawe-points") {
+            options.mgawePointCount = std::stoi(requireValue(arg));
+            if (options.mgawePointCount < 1) {
+                throw std::runtime_error("--mgawe-points must be >= 1");
+            }
+        } else if (arg == "--mgawe-order") {
+            options.mgaweOrder = std::stoi(requireValue(arg));
+            if (options.mgaweOrder < 1) {
+                throw std::runtime_error("--mgawe-order must be >= 1");
+            }
+        } else if (arg == "--mgawe-drop-tolerance") {
+            options.mgaweDropTolerance = std::stod(requireValue(arg));
+            if (options.mgaweDropTolerance <= 0.0) {
+                throw std::runtime_error("--mgawe-drop-tolerance must be > 0");
+            }
+        } else if (arg == "--wcawe-order") {
+            options.wcaweOrder = std::stoi(requireValue(arg));
+            if (options.wcaweOrder < 1) {
+                throw std::runtime_error("--wcawe-order must be >= 1");
+            }
+        } else if (arg == "--wcawe-expansion") {
+            options.wcaweExpansionFrequencyHz = std::stod(requireValue(arg));
+            if (options.wcaweExpansionFrequencyHz <= 0.0) {
+                throw std::runtime_error("--wcawe-expansion must be > 0 Hz");
+            }
+        } else if (arg == "--wcawe-drop-tolerance") {
+            options.wcaweDropTolerance = std::stod(requireValue(arg));
+            if (options.wcaweDropTolerance <= 0.0) {
+                throw std::runtime_error("--wcawe-drop-tolerance must be > 0");
             }
         } else if (arg == "--port-method") {
             const std::string m = requireValue(arg);
@@ -147,7 +217,11 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--max-sweep-points 21] [--max-iterations 400] [--tolerance 1e-7]\n"
                       << "                     [--basis-order 0|1] [--field-output-order 1|2|3]\n"
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
-                      << "                     [--sweep direct|alps] [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"
+                      << "                     [--sweep direct|alps|awe|mgawe|wcawe]\n"
+                      << "                     [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"
+                      << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"
+                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"
+                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12]\n"
                       << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"
                       << "                     [--linear-solver auto|direct|bicgstab|gmres] [--precon none|jacobi|ilu0]\n"
                       << "                     [--gmres-restart 30]\n";
@@ -184,6 +258,7 @@ int runApplication(int argc, char** argv) {
     RunReport report;
     std::filesystem::path crashLogPath;
     std::filesystem::path runJsonPath;
+    std::filesystem::path timingJsonPath;
     const auto runStart = std::chrono::steady_clock::now();
 
     try {
@@ -197,6 +272,7 @@ int runApplication(int argc, char** argv) {
         log.attachLogFile((options.outDir / "run.log").string());
         crashLogPath = options.outDir / "run.crash.log";
         runJsonPath = options.outDir / "run.json";
+        timingJsonPath = options.outDir / "timing.json";
 
         // -------------------- Env header --------------------
         // Captured once and emitted as [env] tagged lines so the log is
@@ -321,6 +397,7 @@ int runApplication(int argc, char** argv) {
         }
         ResultExtractor extractor(project, portModeSolver);
         std::unique_ptr<linalg::ISparseSolver> sparseSolver = factory::makeSparseSolver(options);
+        report.linearSolverBackend = sparseSolver->name();
         log.info("Linear solver backend: " + std::string(sparseSolver->name()));
         if (options.preconditioner != PreconditionerKind::None) {
             std::string preconName = "?";
@@ -333,6 +410,7 @@ int runApplication(int argc, char** argv) {
         }
         std::unique_ptr<sweep::ISweepStrategy> sweepStrategy =
             factory::makeSweepStrategy(options, project, assembler, portModeSolver);
+        report.sweepStrategyName = sweepStrategy->name();
         log.info("Sweep strategy: " + std::string(sweepStrategy->name()));
 
         const auto frequencies = buildFrequencies(project.sweep, options.maxSweepPoints);
@@ -347,7 +425,7 @@ int runApplication(int argc, char** argv) {
         sweepStats.reserve(frequencies.size());
 
         sweep::SweepContext sweepCtx{
-            project, assembler, portModeSolver, extractor, *sparseSolver, log
+            project, assembler, portModeSolver, extractor, *sparseSolver, log, options.outDir
         };
         sweepCtx.linearMaxIterations = options.maxIterations;
         sweepCtx.linearTolerance = options.tolerance;
@@ -432,18 +510,18 @@ int runApplication(int argc, char** argv) {
         log.info("Solver finished, writing run summary and JSON sidecar.");
         log.summary();
 
-        // Capture phase timings into the report after summary() has closed
-        // the last phase. Logger does not expose phase records publicly; we
-        // re-query memory for the final snapshot, store the totals, and
-        // leave per-phase entries zero-padded -- they are still in run.log.
-        // (Keeping the report a bit terse here avoids exposing Logger
-        // internals; the human-readable summary is the source of truth.)
+        report.phases = collectPhaseSummaries(log);
         const auto memFinal = queryProcessMemory();
         if (memFinal.peakBytes > 0) {
-            report.peakMemoryMb = static_cast<double>(memFinal.peakBytes) / (1024.0 * 1024.0);
+            report.peakMemoryMb = bytesToMb(memFinal.peakBytes);
         }
         report.totalElapsedSec = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - runStart).count();
+        if (!writeTimingReport(timingJsonPath, report)) {
+            log.warn("Failed to write timing report to " + timingJsonPath.string());
+        } else {
+            log.info("Wrote " + timingJsonPath.string());
+        }
         if (!writeRunReport(runJsonPath, report)) {
             log.warn("Failed to write JSON sidecar to " + runJsonPath.string());
         } else {
@@ -465,12 +543,16 @@ int runApplication(int argc, char** argv) {
         }
         if (!runJsonPath.empty()) {
             report.status = "fatal";
+            report.phases = collectPhaseSummaries(log);
             const auto memFinal = queryProcessMemory();
             if (memFinal.peakBytes > 0) {
-                report.peakMemoryMb = static_cast<double>(memFinal.peakBytes) / (1024.0 * 1024.0);
+                report.peakMemoryMb = bytesToMb(memFinal.peakBytes);
             }
             report.totalElapsedSec = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - runStart).count();
+            if (!timingJsonPath.empty()) {
+                writeTimingReport(timingJsonPath, report);
+            }
             writeRunReport(runJsonPath, report);
         }
         return 1;

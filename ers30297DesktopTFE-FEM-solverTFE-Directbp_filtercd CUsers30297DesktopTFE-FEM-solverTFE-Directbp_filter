@@ -1,0 +1,628 @@
+warning: in the working copy of 'docs/optimization/README.md', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'docs/optimization/solvers-and-sweeps.md', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'include/bpfem/core/RunReport.hpp', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'include/bpfem/sweep/ISweepStrategy.hpp', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/core/RunReport.cpp', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/factory/SweepStrategyFactory.cpp', CRLF will be replaced by LF the next time Git touches it
+[1mdiff --git a/CMakeLists.txt b/CMakeLists.txt[m
+[1mindex 29da8d5..3f7bce7 100644[m
+[1m--- a/CMakeLists.txt[m
+[1m+++ b/CMakeLists.txt[m
+[36m@@ -27,6 +27,8 @@[m [madd_library(bp_fem_core STATIC[m
+     src/core/Utilities.cpp[m
+     src/factory/SparseSolverFactory.cpp[m
+     src/factory/SweepStrategyFactory.cpp[m
+[32m+[m[32m    src/fastsweep/PadeApproximant.cpp[m
+[32m+[m[32m    src/fastsweep/PolynomialMomentRecurrence.cpp[m
+     src/fem/EdgeTopology.cpp[m
+     src/fem/FEMAssembler.cpp[m
+     src/fem/PortModeSolver.cpp[m
+[36m@@ -44,7 +46,10 @@[m [madd_library(bp_fem_core STATIC[m
+     src/post/OutputWriter.cpp[m
+     src/post/ResultExtractor.cpp[m
+     src/sweep/AlpsSweep.cpp[m
+[32m+[m[32m    src/sweep/AweSweep.cpp[m
+     src/sweep/DirectSweep.cpp[m
+[32m+[m[32m    src/sweep/MgaweSweep.cpp[m
+[32m+[m[32m    src/sweep/WcaweSweep.cpp[m
+     src/tfe/TransfiniteElementBuilder.cpp[m
+ )[m
+ [m
+[1mdiff --git a/README.md b/README.md[m
+[1mindex e8db726..0bcf1bd 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -55,7 +55,7 @@[m [minclude/bpfem/[m
+   fem/        Nedelec 边拓扑和 curl-curl FEM 装配（含 NPM）[m
+   bc/         IBoundaryCondition 抽象 + WavePortBC + Absorbing/Impedance/FiniteConductor 占位[m
+   linalg/     SparseMatrix + ISparseSolver / IPreconditioner 抽象 + 后端实现[m
+[31m-  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep[m
+[32m+[m[32m  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep + AweSweep + MgaweSweep + WcaweSweep[m
+   factory/    SparseSolverFactory + SweepStrategyFactory（按 Options 路由）[m
+   apm/        解析端口模 (Analytic Port Mode)[m
+   tfe/        超限元端口模 (Transfinite Element)[m
+[36m@@ -111,6 +111,33 @@[m [mVTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶[m
+ [m
+ 该路径在 BP filter 基准上 101 频点扫频从 ~22 min 降到 ~104 s（加速 ~12×），与 `--sweep direct` 在所有频点的 S 参数偏差 < 1e-10。当前为 MVP 版本（单展开点 + 复对称 Galerkin + 仅 lossless 材料）；详见 `docs/optimization/alps-sweep/plan.md`。[m
+ [m
+[32m+[m[32m## 快速扫频（AWE / MGAWE / WCAWE）[m
+[32m+[m
+[32m+[m[32m单点 Padé AWE：[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m多点 Galerkin AWE（MGAWE）：[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m良条件 AWE（WCAWE）：[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m- `--mgawe-points`：在扫频区间内自动均匀选择展开点，例如 3 点对应左端、中心、右端。[m
+[32m+[m[32m- `--mgawe-order`：每个展开点生成的局部 AWE 矩向量数量。[m
+[32m+[m[32m- MGAWE 会把所有局部矩向量正交化成一个统一 Galerkin ROM，不是多个局部模型拼接。[m
+[32m+[m[32m- `--wcawe-order`：单展开点 WCAWE 的目标良条件基维度。[m
+[32m+[m[32m- WCAWE 会输出 `basis_condition.csv`，记录传统 AWE 矩基与 WCAWE 正交基的条件曲线。[m
+[32m+[m[32m- 每次运行都会输出 `run.log`、`run.json` 和 `timing.json`，可用于和 direct / ALPS / AWE 做时间与峰值内存对比。[m
+[32m+[m
+ ## 端口建模选择（NPM / APM / TFE）[m
+ [m
+ CLI `--port-method` 控制端口模建立方式：[m
+[1mdiff --git a/docs/optimization/README.md b/docs/optimization/README.md[m
+[1mindex 60a1ba6..19295a4 100644[m
+[1m--- a/docs/optimization/README.md[m
+[1m+++ b/docs/optimization/README.md[m
+[36m@@ -24,6 +24,7 @@[m
+ - **`boundary-and-excitations.md`**：PMC / ABC / PML / 周期 / 集总端口 / 平面波 / 电压源。[m
+ - **`materials.md`**：各向异性、色散、铁氧体、薄层、非线性、温度相关。[m
+ - **`solvers-and-sweeps.md`**：AMS/HX/AMG/DDM/FETI、AWE/Krylov MOR、本征/特征模。[m
+[32m+[m[32m- **`awe-family/README.md`**：AWE、MGAWE、WCAWE 的算法 skill、模块边界与统一校验方法。[m
+ - **`parallelism-and-performance.md`**：OpenMP / TBB / MPI / GPU / I/O / cache。[m
+ - **`geometry-and-mesh.md`**：CAD 导入、网格生成器、曲面/曲边、非协调网格。[m
+ - **`post-processing.md`**：Touchstone、远场、近场、Q、群时延、RCS、表面电流。[m
+[36m@@ -39,6 +40,7 @@[m
+ - **`strategy-interfaces/api.md`**：四个抽象接口的契约说明（参数、调用顺序、错误模型）。[m
+ - **`strategy-interfaces/example.md`**：加新策略的完整示例（以 ImpedanceBC 为例）。[m
+ - **`alps-sweep/plan.md`**：单点 ALPS Krylov MOR。**已落地**。[m
+[32m+[m[32m- **`awe-family/README.md`**：AWE / MGAWE / WCAWE 快速扫频算法族。**设计中**。[m
+ - **`analytic-port/plan.md`**：解析端口模 (APM)。**已落地**。[m
+ - **`transfinite-element/tfe-plan.md`**：超限元数值多模端口 (TFE)。**已落地**。[m
+ [m
+[1mdiff --git a/docs/optimization/solvers-and-sweeps.md b/docs/optimization/solvers-and-sweeps.md[m
+[1mindex 5b7d9cd..ea5f3f5 100644[m
+[1m--- a/docs/optimization/solvers-and-sweeps.md[m
+[1m+++ b/docs/optimization/solvers-and-sweeps.md[m
+[36m@@ -90,7 +90,19 @@[m [mDDM 实现拨入 Phase 3。[m
+ - **离散插值扫频 (Interpolative)**：HFSS 的 *Interpolating Sweep* 思路，对 S(f) 做 Cauchy / Stoer-Bulirsch 插值。[m
+ - **Discrete vs Fast (Pole-residue) sweep**：为 MOR 输出 *pole-residue* 表示，可后处理时直接评估任意频点。[m
+ [m
+[31m-**落地状态**：单点 Padé 风格 ALPS（PRIMA/Galerkin 路径）已经合入主干。CLI `--sweep alps` 启用，详见 `alps-sweep/plan.md`；BP filter 基准 101 点扫频加速 ~12×，与 direct 偏差 < 1e-10。下一步是多展开点 + 自适应。[m
+[32m+[m[32m**落地状态**：单点 Padé 风格 ALPS（PRIMA/Galerkin 路径）已经合入主干。CLI `--sweep alps` 启用，详见 `alps-sweep/plan.md`；BP filter 基准 101 点扫频加速 ~12×，与 direct 偏差 < 1e-10。[m
+[32m+[m
+[32m+[m[32mAWE / MGAWE / WCAWE 已接入 CLI：[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe[m
+[32m+[m[32m.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m其中 MGAWE 使用多个展开点的局部 AWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 使用单展开点传统 AWE 矩序列生成良条件正交基，并输出 `basis_condition.csv` 记录 AWE/WCAWE 条件曲线。下一步是多点 WCAWE 和自适应展开点。[m
+[32m+[m
+[32m+[m[32mAWE / MGAWE / WCAWE 的模块化算法 skill 与校验方法见 `awe-family/README.md`。这组文档把显式 Padé AWE、多点 Galerkin AWE 和良条件 AWE 拆成可独立实现、可抽离的 fast-sweep 子模块。[m
+ [m
+ 落地接口：[m
+ [m
+[36m@@ -108,7 +120,10 @@[m [mstruct SweepStrategy {[m
+ | 任务 | 优先级 | 估算 | 状态 |[m
+ |------|--------|------|------|[m
+ | 自适应频点加密 | 高 | M | 计划中 |[m
+[31m-| AWE 单点 Padé / ALPS Galerkin | 高 | M | **已实现 (`--sweep alps`)** |[m
+[32m+[m[32m| AWE 单点 Padé / ALPS Galerkin | 高 | M | **已实现 (`--sweep awe`, `--sweep alps`)** |[m
+[32m+[m[32m| MGAWE 多点 Galerkin AWE | 高 | M | **已实现 (`--sweep mgawe`)** |[m
+[32m+[m[32m| WCAWE 良条件 AWE | 高 | M | **已实现 (`--sweep wcawe`)** |[m
+[32m+[m[32m| AWE / MGAWE / WCAWE 模块化 skill 与校验 | 高 | S | **已规划并落地 (`awe-family/`)** |[m
+ | Krylov MOR 多点 | 高 | L | 计划中 |[m
+ | Pole-residue 输出 + 任意频评估 | 中 | M |[m
+ [m
+[1mdiff --git a/include/bpfem/app/Application.hpp b/include/bpfem/app/Application.hpp[m
+[1mindex b6e44b7..378e865 100644[m
+[1m--- a/include/bpfem/app/Application.hpp[m
+[1m+++ b/include/bpfem/app/Application.hpp[m
+[36m@@ -7,7 +7,10 @@[m [mnamespace fem {[m
+ [m
+ enum class SweepStrategy {[m
+     Direct,  // legacy per-frequency direct solve[m
+[31m-    Alps     // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)[m
+[32m+[m[32m    Alps,    // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)[m
+[32m+[m[32m    Awe,     // Asymptotic Waveform Evaluation (single-point Padé MVP)[m
+[32m+[m[32m    Mgawe,   // Multipoint Galerkin AWE (global reduced basis)[m
+[32m+[m[32m    Wcawe    // Well-Conditioned AWE (orthogonalized moment basis)[m
+ };[m
+ [m
+ enum class PortMethod {[m
+[36m@@ -64,6 +67,14 @@[m [mstruct Options {[m
+     SweepStrategy sweepStrategy = SweepStrategy::Direct;[m
+     int alpsKrylovOrder = 30;             // q per port; ROM dim ~ Np * q after deflation[m
+     double alpsExpansionFrequencyHz = 0.0;  // 0 means "use band center"[m
+[32m+[m[32m    int aweOrder = 8;                       // q for [q-1/q] Padé[m
+[32m+[m[32m    double aweExpansionFrequencyHz = 0.0;   // 0 means "use band center"[m
+[32m+[m[32m    int mgawePointCount = 3;                // number of expansion points[m
+[32m+[m[32m    int mgaweOrder = 8;                     // local moment count per expansion point[m
+[32m+[m[32m    double mgaweDropTolerance = 1.0e-10;    // global basis deflation threshold[m
+[32m+[m[32m    int wcaweOrder = 12;                    // target well-conditioned basis size[m
+[32m+[m[32m    double wcaweExpansionFrequencyHz = 0.0; // 0 means "use band center"[m
+[32m+[m[32m    double wcaweDropTolerance = 1.0e-12;    // R diagonal / MGS deflation threshold[m
+ [m
+     // Port-mode construction strategy. Default = Numerical (2D H(curl)[m
+     // eigensolve on the port face mesh). Use Analytic only when an exact[m
+[1mdiff --git a/include/bpfem/core/Logger.hpp b/include/bpfem/core/Logger.hpp[m
+[1mindex 815ded7..92b1de8 100644[m
+[1m--- a/include/bpfem/core/Logger.hpp[m
+[1m+++ b/include/bpfem/core/Logger.hpp[m
+[36m@@ -47,6 +47,14 @@[m [mstd::string formatBytes(std::size_t bytes);[m
+ //   log.summary();                                     // table at end[m
+ class Logger {[m
+ public:[m
+[32m+[m[32m    struct PhaseSnapshot {[m
+[32m+[m[32m        std::string name;[m
+[32m+[m[32m        double elapsedSec = 0.0;[m
+[32m+[m[32m        MemoryStats startMem{};[m
+[32m+[m[32m        MemoryStats endMem{};[m
+[32m+[m[32m        bool closed = false;[m
+[32m+[m[32m    };[m
+[32m+[m
+     explicit Logger(std::ostream& consoleStream);[m
+     ~Logger();[m
+ [m
+[36m@@ -88,6 +96,12 @@[m [mpublic:[m
+     // Print the per-phase + total summary table.[m
+     void summary();[m
+ [m
+[32m+[m[32m    // Read-only copy of the phase timing/memory records. If the current[m
+[32m+[m[32m    // phase is still open, its elapsed time and memory snapshot are measured[m
+[32m+[m[32m    // at call time without closing the phase. This keeps run.json/timing.json[m
+[32m+[m[32m    // in sync with the human-readable run.log summary.[m
+[32m+[m[32m    std::vector<PhaseSnapshot> phaseSnapshots() const;[m
+[32m+[m
+     // Dump the last bufferedLines + active phase + active context into a[m
+     // separate .crash.log next to the main log. Safe to call inside[m
+     // catch(std::exception). Returns true iff the file was successfully[m
+[1mdiff --git a/include/bpfem/core/RunReport.hpp b/include/bpfem/core/RunReport.hpp[m
+[1mindex 8049539..e780bea 100644[m
+[1m--- a/include/bpfem/core/RunReport.hpp[m
+[1m+++ b/include/bpfem/core/RunReport.hpp[m
+[36m@@ -48,6 +48,8 @@[m [mstruct RunReport {[m
+     std::string memoryDescription;[m
+     std::string commandLine;[m
+     std::string workingDirectory;[m
+[32m+[m[32m    std::string sweepStrategyName;[m
+[32m+[m[32m    std::string linearSolverBackend;[m
+ [m
+     // Mirrors Options. Stringified to keep the JSON writer trivial; CI can[m
+     // still grep / regex over these.[m
+[36m@@ -68,4 +70,9 @@[m [mvoid fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con[m
+ // schema validation.[m
+ bool writeRunReport(const std::filesystem::path& path, const RunReport& report);[m
+ [m
+[32m+[m[32m// Write a compact timing/memory report intended for algorithm comparisons.[m
+[32m+[m[32m// This duplicates only the metrics most useful for comparing direct / ALPS /[m
+[32m+[m[32m// AWE-family runs, while run.json remains the full run sidecar.[m
+[32m+[m[32mbool writeTimingReport(const std::filesystem::path& path, const RunReport& report);[m
+[32m+[m
+ }  // namespace fem[m
+[1mdiff --git a/include/bpfem/sweep/ISweepStrategy.hpp b/include/bpfem/sweep/ISweepStrategy.hpp[m
+[1mindex a538746..1f3549a 100644[m
+[1m--- a/include/bpfem/sweep/ISweepStrategy.hpp[m
+[1m+++ b/include/bpfem/sweep/ISweepStrategy.hpp[m
+[36m@@ -8,6 +8,7 @@[m
+ #include "bpfem/post/ResultExtractor.hpp"[m
+ [m
+ #include <complex>[m
+[32m+[m[32m#include <filesystem>[m
+ #include <functional>[m
+ #include <vector>[m
+ [m
+[36m@@ -26,6 +27,7 @@[m [mstruct SweepContext {[m
+     const ResultExtractor& extractor;[m
+     linalg::ISparseSolver& solver;[m
+     Logger& log;[m
+[32m+[m[32m    std::filesystem::path outputDirectory;[m
+ [m
+     // Per-frequency callback invoked by direct-style strategies after a[m
+     // successful solve. ALPS-style strategies may ignore it (no per-frequency[m
+[1mdiff --git a/src/app/Application.cpp b/src/app/Application.cpp[m
+[1mindex 6aec6d7..376a42e 100644[m
+[1m--- a/src/app/Application.cpp[m
+[1m+++ b/src/app/Application.cpp[m
+[36m@@ -32,10 +32,34 @@[m
+ #include <sstream>[m
+ #include <stdexcept>[m
+ #include <string>[m
+[32m+[m[32m#include <utility>[m
+ #include <vector>[m
+ [m
+ namespace fem {[m
+ [m
+[32m+[m[32mnamespace {[m
+[32m+[m
+[32m+[m[32mdouble bytesToMb(std::size_t bytes) {[m
+[32m+[m[32m    return static_cast<double>(bytes) / (1024.0 * 1024.0);[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mstd::vector<PhaseSummary> collectPhaseSummaries(const Logger& log) {[m
+[32m+[m[32m    std::vector<PhaseSummary> out;[m
+[32m+[m[32m    const auto snapshots = log.phaseSnapshots();[m
+[32m+[m[32m    out.reserve(snapshots.size());[m
+[32m+[m[32m    for (const auto& p : snapshots) {[m
+[32m+[m[32m        PhaseSummary s;[m
+[32m+[m[32m        s.name = p.name;[m
+[32m+[m[32m        s.elapsedSec = p.elapsedSec;[m
+[32m+[m[32m        s.endCurrentMb = p.endMem.currentBytes > 0 ? bytesToMb(p.endMem.currentBytes) : 0.0;[m
+[32m+[m[32m        s.endPeakMb = p.endMem.peakBytes > 0 ? bytesToMb(p.endMem.peakBytes) : 0.0;[m
+[32m+[m[32m        out.push_back(std::move(s));[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return out;[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m}  // namespace[m
+[32m+[m
+ // Parse the bp_fem_solver command line into an Options struct. Each option[m
+ // takes either zero or one value (`--flag` vs `--flag <value>`), with the[m
+ // value consumed via the requireValue lambda to give a precise error if the[m
+[36m@@ -84,8 +108,14 @@[m [mOptions parseOptions(int argc, char** argv) {[m
+                 options.sweepStrategy = SweepStrategy::Direct;[m
+             } else if (mode == "alps") {[m
+                 options.sweepStrategy = SweepStrategy::Alps;[m
+[32m+[m[32m            } else if (mode == "awe") {[m
+[32m+[m[32m                options.sweepStrategy = SweepStrategy::Awe;[m
+[32m+[m[32m            } else if (mode == "mgawe") {[m
+[32m+[m[32m                options.sweepStrategy = SweepStrategy::Mgawe;[m
+[32m+[m[32m            } else if (mode == "wcawe") {[m
+[32m+[m[32m                options.sweepStrategy = SweepStrategy::Wcawe;[m
+             } else {[m
+[31m-                throw std::runtime_error("--sweep must be 'direct' or 'alps'");[m
+[32m+[m[32m                throw std::runtime_error("--sweep must be 'direct', 'alps', 'awe', 'mgawe', or 'wcawe'");[m
+             }[m
+         } else if (arg == "--alps-krylov-order") {[m
+             options.alpsKrylovOrder = std::stoi(requireValue(arg));[m
+[36m@@ -97,6 +127,46 @@[m [mOptions parseOptions(int argc, char** argv) {[m
+             if (options.alpsExpansionFrequencyHz <= 0.0) {[m
+                 throw std::runtime_error("--alps-expansion must be > 0 Hz");[m
+             }[m
+[32m+[m[32m        } else if (arg == "--awe-order") {[m
+[32m+[m[32m            options.aweOrder = std::stoi(requireValue(arg));[m
+[32m+[m[32m            if (options.aweOrder < 1) {[m
+[32m+[m[32m                throw std::runtime_error("--awe-order must be >= 1");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--awe-expansion") {[m
+[32m+[m[32m            options.aweExpansionFrequencyHz = std::stod(requireValue(arg));[m
+[32m+[m[32m            if (options.aweExpansionFrequencyHz <= 0.0) {[m
+[32m+[m[32m                throw std::runtime_error("--awe-expansion must be > 0 Hz");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--mgawe-points") {[m
+[32m+[m[32m            options.mgawePointCount = std::stoi(requireValue(arg));[m
+[32m+[m[32m            if (options.mgawePointCount < 1) {[m
+[32m+[m[32m                throw std::runtime_error("--mgawe-points must be >= 1");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--mgawe-order") {[m
+[32m+[m[32m            options.mgaweOrder = std::stoi(requireValue(arg));[m
+[32m+[m[32m            if (options.mgaweOrder < 1) {[m
+[32m+[m[32m                throw std::runtime_error("--mgawe-order must be >= 1");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--mgawe-drop-tolerance") {[m
+[32m+[m[32m            options.mgaweDropTolerance = std::stod(requireValue(arg));[m
+[32m+[m[32m            if (options.mgaweDropTolerance <= 0.0) {[m
+[32m+[m[32m                throw std::runtime_error("--mgawe-drop-tolerance must be > 0");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--wcawe-order") {[m
+[32m+[m[32m            options.wcaweOrder = std::stoi(requireValue(arg));[m
+[32m+[m[32m            if (options.wcaweOrder < 1) {[m
+[32m+[m[32m                throw std::runtime_error("--wcawe-order must be >= 1");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--wcawe-expansion") {[m
+[32m+[m[32m            options.wcaweExpansionFrequencyHz = std::stod(requireValue(arg));[m
+[32m+[m[32m            if (options.wcaweExpansionFrequencyHz <= 0.0) {[m
+[32m+[m[32m                throw std::runtime_error("--wcawe-expansion must be > 0 Hz");[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } else if (arg == "--wcawe-drop-tolerance") {[m
+[32m+[m[32m            options.wcaweDropTolerance = std::stod(requireValue(arg));[m
+[32m+[m[32m            if (options.wcaweDropTolerance <= 0.0) {[m
+[32m+[m[32m                throw std::runtime_error("--wcawe-drop-tolerance must be > 0");[m
+[32m+[m[32m            }[m
+         } else if (arg == "--port-method") {[m
+             const std::string m = requireValue(arg);[m
+             if (m == "numerical" || m == "npm") {[m
+[36m@@ -147,7 +217,11 @@[m [mOptions parseOptions(int argc, char** argv) {[m
+                       << "                     [--max-sweep-points 21] [--max-iterations 400] [--tolerance 1e-7]\n"[m
+                       << "                     [--basis-order 0|1] [--field-output-order 1|2|3]\n"[m
+                       << "                     [--write-all-fields|--no-write-all-fields]\n"[m
+[31m-                      << "                     [--sweep direct|alps] [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"[m
+[32m+[m[32m                      << "                     [--sweep direct|alps|awe|mgawe|wcawe]\n"[m
+[32m+[m[32m                      << "                     [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"[m
+[32m+[m[32m                      << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"[m
+[32m+[m[32m                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"[m
+[32m+[m[32m                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12]\n"[m
+                       << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"[m
+                       << "                     [--linear-solver auto|direct|bicgstab|gmres] [--precon none|jacobi|ilu0]\n"[m
+                       << "                     [--gmres-restart 30]\n";[m
+[36m@@ -184,6 +258,7 @@[m [mint runApplication(int argc, char** argv) {[m
+     RunReport report;[m
+     std::filesystem::path crashLogPath;[m
+     std::filesystem::path runJsonPath;[m
+[32m+[m[32m    std::filesystem::path timingJsonPath;[m
+     const auto runStart = std::chrono::steady_clock::now();[m
+ [m
+     try {[m
+[36m@@ -197,6 +272,7 @@[m [mint runApplication(int argc, char** argv) {[m
+         log.attachLogFile((options.outDir / "run.log").string());[m
+         crashLogPath = options.outDir / "run.crash.log";[m
+         runJsonPath = options.outDir / "run.json";[m
+[32m+[m[32m        timingJsonPath = options.outDir / "timing.json";[m
+ [m
+         // -------------------- Env header --------------------[m
+         // Captured once and emitted as [env] tagged lines so the log is[m
+[36m@@ -321,6 +397,7 @@[m [mint runApplication(int argc, char** argv) {[m
+         }[m
+         ResultExtractor extractor(project, portModeSolver);[m
+         std::unique_ptr<linalg::ISparseSolver> sparseSolver = factory::makeSparseSolver(options);[m
+[32m+[m[32m        report.linearSolverBackend = sparseSolver->name();[m
+         log.info("Linear solver backend: " + std::string(sparseSolver->name()));[m
+         if (options.preconditioner != PreconditionerKind::None) {[m
+             std::string preconName = "?";[m
+[36m@@ -333,6 +410,7 @@[m [mint runApplication(int argc, char** argv) {[m
+         }[m
+         std::unique_ptr<sweep::ISweepStrategy> sweepStrategy =[m
+             factory::makeSweepStrategy(options, project, assembler, portModeSolver);[m
+[32m+[m[32m        report.sweepStrategyName = sweepStrategy->name();[m
+         log.info("Sweep strategy: " + std::string(sweepStrategy->name()));[m
+ [m
+         const auto frequencies = buildFrequencies(project.sweep, options.maxSweepPoints);[m
+[36m@@ -347,7 +425,7 @@[m [mint runApplication(int argc, char** argv) {[m
+         sweepStats.reserve(frequencies.size());[m
+ [m
+         sweep::SweepContext sweepCtx{[m
+[31m-            project, assembler, portModeSolver, extractor, *sparseSolver, log[m
+[32m+[m[32m            project, assembler, portModeSolver, extractor, *sparseSolver, log, options.outDir[m
+         };[m
+         sweepCtx.linearMaxIterations = options.maxIterations;[m
+         sweepCtx.linearTolerance = options.tolerance;[m
+[36m@@ -432,18 +510,18 @@[m [mint runApplication(int argc, char** argv) {[m
+         log.info("Solver finished, writing run summary and JSON sidecar.");[m
+         log.summary();[m
+ [m
+[31m-        // Capture phase timings into the report after summary() has closed[m
+[31m-        // the last phase. Logger does not expose phase records publicly; we[m
+[31m-        // re-query memory for the final snapshot, store the totals, and[m
+[31m-        // leave per-phase entries zero-padded -- they are still in run.log.[m
+[31m-        // (Keeping the report a bit terse here avoids exposing Logger[m
+[31m-        // internals; the human-readable summary is the source of truth.)[m
+[32m+[m[32m        report.phases = collectPhaseSummaries(log);[m
+         const auto memFinal = queryProcessMemory();[m
+         if (memFinal.peakBytes > 0) {[m
+[31m-            report.peakMemoryMb = static_cast<double>(memFinal.peakBytes) / (1024.0 * 1024.0);[m
+[32m+[m[32m            report.peakMemoryMb = bytesToMb(memFinal.peakBytes);[m
+         }[m
+         report.totalElapsedSec = std::chrono::duration<double>([m
+             std::chrono::steady_clock::now() - runStart).count();[m
+[32m+[m[32m        if (!writeTimingReport(timingJsonPath, report)) {[m
+[32m+[m[32m            log.warn("Failed to write timing report to " + timingJsonPath.string());[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m            log.info("Wrote " + timingJsonPath.string());[m
+[32m+[m[32m        }[m
+         if (!writeRunReport(runJsonPath, report)) {[m
+             log.warn("Failed to write JSON sidecar to " + runJsonPath.string());[m
+         } else {[m
+[36m@@ -465,12 +543,16 @@[m [mint runApplication(int argc, char** argv) {[m
+         }[m
+         if (!runJsonPath.empty()) {[m
+             report.status = "fatal";[m
+[32m+[m[32m            report.phases = collectPhaseSummaries(log);[m
+             const auto memFinal = queryProcessMemory();[m
+             if (memFinal.peakBytes > 0) {[m
+[31m-                report.peakMemoryMb = static_cast<double>(memFinal.peakBytes) / (1024.0 * 1024.0);[m
+[32m+[m[32m                report.peakMemoryMb = bytesToMb(memFinal.peakBytes);[m
+             }[m
+             report.totalElapsedSec = std::chrono::duration<double>([m
+                 std::chrono::steady_clock::now() - runStart).count();[m
+[32m+[m[32m            if (!timingJsonPath.empty()) {[m
+[32m+[m[32m                writeTimingReport(timingJsonPath, report);[m
+[32m+[m[32m            }[m
+             writeRunReport(runJsonPath, report);[m
+         }[m
+         return 1;[m
+[1mdiff --git a/src/core/Logger.cpp b/src/core/Logger.cpp[m
+[1mindex 0d3bfb5..2de6fb7 100644[m
+[1m--- a/src/core/Logger.cpp[m
+[1m+++ b/src/core/Logger.cpp[m
+[36m@@ -234,6 +234,27 @@[m [mvoid Logger::summary() {[m
+     writeLine(totalRow.str());[m
+ }[m
+ [m
+[32m+[m[32mstd::vector<Logger::PhaseSnapshot> Logger::phaseSnapshots() const {[m
+[32m+[m[32m    std::vector<PhaseSnapshot> out;[m
+[32m+[m[32m    out.reserve(phases_.size());[m
+[32m+[m[32m    const auto now = std::chrono::steady_clock::now();[m
+[32m+[m[32m    for (const auto& p : phases_) {[m
+[32m+[m[32m        PhaseSnapshot snap;[m
+[32m+[m[32m        snap.name = p.name;[m
+[32m+[m[32m        snap.startMem = p.startMem;[m
+[32m+[m[32m        snap.closed = p.closed;[m
+[32m+[m[32m        if (p.closed) {[m
+[32m+[m[32m            snap.elapsedSec = p.elapsedSec;[m
+[32m+[m[32m            snap.endMem = p.endMem;[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m            snap.elapsedSec = std::chrono::duration<double>(now - p.start).count();[m
+[32m+[m[32m            snap.endMem = queryProcessMemory();[m
+[32m+[m[32m        }[m
+[32m+[m[32m        out.push_back(std::move(snap));[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return out;[m
+[32m+[m[32m}[m
+[32m+[m
+ bool Logger::writeCrashDump(const std::string& crashLogPath, const std::string& whatMessage) {[m
+     std::ofstream crash(crashLogPath, std::ios::out | std::ios::trunc);[m
+     if (!crash.good()) {[m
+[1mdiff --git a/src/core/RunReport.cpp b/src/core/RunReport.cpp[m
+[1mindex 1b04247..458b147 100644[m
+[1m--- a/src/core/RunReport.cpp[m
+[1m+++ b/src/core/RunReport.cpp[m
+[36m@@ -125,6 +125,15 @@[m [mprivate:[m
+     bool suppressIndent_ = false;[m
+ };[m
+ [m
+[32m+[m[32mstd::string optionValue(const RunReport& report, const std::string& key) {[m
+[32m+[m[32m    for (const auto& [k, v] : report.options) {[m
+[32m+[m[32m        if (k == key) {[m
+[32m+[m[32m            return v;[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return {};[m
+[32m+[m[32m}[m
+[32m+[m
+ }  // namespace[m
+ [m
+ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options) {[m
+[36m@@ -150,10 +159,27 @@[m [mvoid fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con[m
+     add("fieldOutputOrder", std::to_string(options.fieldOutputOrder));[m
+     add("tolerance", std::to_string(options.tolerance));[m
+     add("writeAllFields", options.writeAllFields ? "true" : "false");[m
+[31m-    add("sweepStrategy",[m
+[31m-        options.sweepStrategy == SweepStrategy::Direct ? "direct" : "alps");[m
+[32m+[m[32m    {[m
+[32m+[m[32m        std::string s = "direct";[m
+[32m+[m[32m        switch (options.sweepStrategy) {[m
+[32m+[m[32m            case SweepStrategy::Direct: s = "direct"; break;[m
+[32m+[m[32m            case SweepStrategy::Alps:   s = "alps"; break;[m
+[32m+[m[32m            case SweepStrategy::Awe:    s = "awe"; break;[m
+[32m+[m[32m            case SweepStrategy::Mgawe:  s = "mgawe"; break;[m
+[32m+[m[32m            case SweepStrategy::Wcawe:  s = "wcawe"; break;[m
+[32m+[m[32m        }[m
+[32m+[m[32m        add("sweepStrategy", s);[m
+[32m+[m[32m    }[m
+     add("alpsKrylovOrder", std::to_string(options.alpsKrylovOrder));[m
+     add("alpsExpansionFrequencyHz", std::to_string(options.alpsExpansionFrequencyHz));[m
+[32m+[m[32m    add("aweOrder", std::to_string(options.aweOrder));[m
+[32m+[m[32m    add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));[m
+[32m+[m[32m    add("mgawePointCount", std::to_string(options.mgawePointCount));[m
+[32m+[m[32m    add("mgaweOrder", std::to_string(options.mgaweOrder));[m
+[32m+[m[32m    add("mgaweDropTolerance", std::to_string(options.mgaweDropTolerance));[m
+[32m+[m[32m    add("wcaweOrder", std::to_string(options.wcaweOrder));[m
+[32m+[m[32m    add("wcaweExpansionFrequencyHz", std::to_string(options.wcaweExpansionFrequencyHz));[m
+[32m+[m[32m    add("wcaweDropTolerance", std::to_string(options.wcaweDropTolerance));[m
+     add("portMethod",[m
+         options.portMethod == PortMethod::Analytic    ? "analytic"[m
+       : options.portMethod == PortMethod::Transfinite ? "tfe"[m
+[36m@@ -199,6 +225,8 @@[m [mbool writeRunReport(const std::filesystem::path& path, const RunReport& report)[m
+       w.key("memory");           w.value(report.memoryDescription);[m
+       w.key("cmdline");          w.value(report.commandLine);[m
+       w.key("cwd");              w.value(report.workingDirectory);[m
+[32m+[m[32m      w.key("sweep_strategy");   w.value(report.sweepStrategyName);[m
+[32m+[m[32m      w.key("linear_solver_backend"); w.value(report.linearSolverBackend);[m
+ [m
+       w.key("options");[m
+       w.beginObject();[m
+[36m@@ -243,4 +271,51 @@[m [mbool writeRunReport(const std::filesystem::path& path, const RunReport& report)[m
+     return out.good();[m
+ }[m
+ [m
+[32m+[m[32mbool writeTimingReport(const std::filesystem::path& path, const RunReport& report) {[m
+[32m+[m[32m    std::ofstream out(path, std::ios::out | std::ios::trunc);[m
+[32m+[m[32m    if (!out.good()) {[m
+[32m+[m[32m        return false;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    double totalAssembleSec = 0.0;[m
+[32m+[m[32m    double totalSolveSec = 0.0;[m
+[32m+[m[32m    for (const auto& fp : report.sweep) {[m
+[32m+[m[32m        totalAssembleSec += fp.assembleSec;[m
+[32m+[m[32m        totalSolveSec += fp.solveSec;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    JsonWriter w(out);[m
+[32m+[m[32m    w.beginObject();[m
+[32m+[m[32m      w.key("schema");              w.value(1);[m
+[32m+[m[32m      w.key("status");              w.value(report.status);[m
+[32m+[m[32m      w.key("algorithm");           w.value(report.sweepStrategyName.empty()[m
+[32m+[m[32m                                              ? optionValue(report, "sweepStrategy")[m
+[32m+[m[32m                                              : report.sweepStrategyName);[m
+[32m+[m[32m      w.key("basis_order");         w.value(optionValue(report, "basisOrder"));[m
+[32m+[m[32m      w.key("max_sweep_points");    w.value(optionValue(report, "maxSweepPoints"));[m
+[32m+[m[32m      w.key("linear_solver");       w.value(optionValue(report, "linearSolver"));[m
+[32m+[m[32m      w.key("linear_solver_backend"); w.value(report.linearSolverBackend);[m
+[32m+[m[32m      w.key("preconditioner");      w.value(optionValue(report, "preconditioner"));[m
+[32m+[m[32m      w.key("total_elapsed_s");     w.value(report.totalElapsedSec);[m
+[32m+[m[32m      w.key("peak_memory_mb");      w.value(report.peakMemoryMb);[m
+[32m+[m[32m      w.key("frequency_points");    w.value(report.sweep.size());[m
+[32m+[m[32m      w.key("total_assemble_s");    w.value(totalAssembleSec);[m
+[32m+[m[32m      w.key("total_solve_s");       w.value(totalSolveSec);[m
+[32m+[m[32m      w.key("phases");[m
+[32m+[m[32m      w.beginArray();[m
+[32m+[m[32m        for (const auto& p : report.phases) {[m
+[32m+[m[32m            w.beginObject();[m
+[32m+[m[32m              w.key("name");           w.value(p.name);[m
+[32m+[m[32m              w.key("elapsed_s");      w.value(p.elapsedSec);[m
+[32m+[m[32m              w.key("end_current_mb"); w.value(p.endCurrentMb);[m
+[32m+[m[32m              w.key("end_peak_mb");    w.value(p.endPeakMb);[m
+[32m+[m[32m            w.endObject();[m
+[32m+[m[32m        }[m
+[32m+[m[32m      w.endArray();[m
+[32m+[m[32m    w.endObject();[m
+[32m+[m[32m    out << "\n";[m
+[32m+[m[32m    out.flush();[m
+[32m+[m[32m    return out.good();[m
+[32m+[m[32m}[m
+[32m+[m
+ }  // namespace fem[m
+[1mdiff --git a/src/factory/SweepStrategyFactory.cpp b/src/factory/SweepStrategyFactory.cpp[m
+[1mindex a392be9..0cb9736 100644[m
+[1m--- a/src/factory/SweepStrategyFactory.cpp[m
+[1m+++ b/src/factory/SweepStrategyFactory.cpp[m
+[36m@@ -16,7 +16,10 @@[m
+ #include "bpfem/factory/SweepStrategyFactory.hpp"[m
+ [m
+ #include "bpfem/sweep/AlpsSweep.hpp"[m
+[32m+[m[32m#include "bpfem/sweep/AweSweep.hpp"[m
+ #include "bpfem/sweep/DirectSweep.hpp"[m
+[32m+[m[32m#include "bpfem/sweep/MgaweSweep.hpp"[m
+[32m+[m[32m#include "bpfem/sweep/WcaweSweep.hpp"[m
+ [m
+ namespace fem::factory {[m
+ [m
+[36m@@ -38,6 +41,29 @@[m [mstd::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy([m
+             return std::make_unique<sweep::AlpsSweep>(project, assembler, portModeSolver,[m
+                                                        alpsOpts);[m
+         }[m
+[32m+[m[32m        case SweepStrategy::Awe: {[m
+[32m+[m[32m            sweep::AweOptions aweOpts;[m
+[32m+[m[32m            aweOpts.order = options.aweOrder;[m
+[32m+[m[32m            aweOpts.expansionFrequencyHz = options.aweExpansionFrequencyHz;[m
+[32m+[m[32m            return std::make_unique<sweep::AweSweep>(project, assembler, portModeSolver,[m
+[32m+[m[32m                                                     aweOpts);[m
+[32m+[m[32m        }[m
+[32m+[m[32m        case SweepStrategy::Mgawe: {[m
+[32m+[m[32m            sweep::MgaweOptions mgaweOpts;[m
+[32m+[m[32m            mgaweOpts.expansionPointCount = options.mgawePointCount;[m
+[32m+[m[32m            mgaweOpts.localOrder = options.mgaweOrder;[m
+[32m+[m[32m            mgaweOpts.dropTolerance = options.mgaweDropTolerance;[m
+[32m+[m[32m            return std::make_unique<sweep::MgaweSweep>(project, assembler, portModeSolver,[m
+[32m+[m[32m                                                       mgaweOpts);[m
+[32m+[m[32m        }[m
+[32m+[m[32m        case SweepStrategy::Wcawe: {[m
+[32m+[m[32m            sweep::WcaweOptions wcaweOpts;[m
+[32m+[m[32m            wcaweOpts.order = options.wcaweOrder;[m
+[32m+[m[32m            wcaweOpts.expansionFrequencyHz = options.wcaweExpansionFrequencyHz;[m
+[32m+[m[32m            wcaweOpts.dropTolerance = options.wcaweDropTolerance;[m
+[32m+[m[32m            return std::make_unique<sweep::WcaweSweep>(project, assembler, portModeSolver,[m
+[32m+[m[32m                                                       wcaweOpts);[m
+[32m+[m[32m        }[m
+         case SweepStrategy::Direct:[m
+         default:[m
+             // DirectSweep is parameterless; per-frequency assemble + solve[m

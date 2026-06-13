@@ -234,6 +234,27 @@ void Logger::summary() {
     writeLine(totalRow.str());
 }
 
+std::vector<Logger::PhaseSnapshot> Logger::phaseSnapshots() const {
+    std::vector<PhaseSnapshot> out;
+    out.reserve(phases_.size());
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& p : phases_) {
+        PhaseSnapshot snap;
+        snap.name = p.name;
+        snap.startMem = p.startMem;
+        snap.closed = p.closed;
+        if (p.closed) {
+            snap.elapsedSec = p.elapsedSec;
+            snap.endMem = p.endMem;
+        } else {
+            snap.elapsedSec = std::chrono::duration<double>(now - p.start).count();
+            snap.endMem = queryProcessMemory();
+        }
+        out.push_back(std::move(snap));
+    }
+    return out;
+}
+
 bool Logger::writeCrashDump(const std::string& crashLogPath, const std::string& whatMessage) {
     std::ofstream crash(crashLogPath, std::ios::out | std::ios::trunc);
     if (!crash.good()) {

@@ -48,6 +48,8 @@ struct RunReport {
     std::string memoryDescription;
     std::string commandLine;
     std::string workingDirectory;
+    std::string sweepStrategyName;
+    std::string linearSolverBackend;
 
     // Mirrors Options. Stringified to keep the JSON writer trivial; CI can
     // still grep / regex over these.
@@ -67,5 +69,10 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
 // Write the report to disk. Returns true on success. Hand-rolled JSON; no
 // schema validation.
 bool writeRunReport(const std::filesystem::path& path, const RunReport& report);
+
+// Write a compact timing/memory report intended for algorithm comparisons.
+// This duplicates only the metrics most useful for comparing direct / ALPS /
+// AWE-family runs, while run.json remains the full run sidecar.
+bool writeTimingReport(const std::filesystem::path& path, const RunReport& report);
 
 }  // namespace fem

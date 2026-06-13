@@ -16,7 +16,10 @@
 #include "bpfem/factory/SweepStrategyFactory.hpp"
 
 #include "bpfem/sweep/AlpsSweep.hpp"
+#include "bpfem/sweep/AweSweep.hpp"
 #include "bpfem/sweep/DirectSweep.hpp"
+#include "bpfem/sweep/MgaweSweep.hpp"
+#include "bpfem/sweep/WcaweSweep.hpp"
 
 namespace fem::factory {
 
@@ -37,6 +40,29 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
             // factorization).
             return std::make_unique<sweep::AlpsSweep>(project, assembler, portModeSolver,
                                                        alpsOpts);
+        }
+        case SweepStrategy::Awe: {
+            sweep::AweOptions aweOpts;
+            aweOpts.order = options.aweOrder;
+            aweOpts.expansionFrequencyHz = options.aweExpansionFrequencyHz;
+            return std::make_unique<sweep::AweSweep>(project, assembler, portModeSolver,
+                                                     aweOpts);
+        }
+        case SweepStrategy::Mgawe: {
+            sweep::MgaweOptions mgaweOpts;
+            mgaweOpts.expansionPointCount = options.mgawePointCount;
+            mgaweOpts.localOrder = options.mgaweOrder;
+            mgaweOpts.dropTolerance = options.mgaweDropTolerance;
+            return std::make_unique<sweep::MgaweSweep>(project, assembler, portModeSolver,
+                                                       mgaweOpts);
+        }
+        case SweepStrategy::Wcawe: {
+            sweep::WcaweOptions wcaweOpts;
+            wcaweOpts.order = options.wcaweOrder;
+            wcaweOpts.expansionFrequencyHz = options.wcaweExpansionFrequencyHz;
+            wcaweOpts.dropTolerance = options.wcaweDropTolerance;
+            return std::make_unique<sweep::WcaweSweep>(project, assembler, portModeSolver,
+                                                       wcaweOpts);
         }
         case SweepStrategy::Direct:
         default:

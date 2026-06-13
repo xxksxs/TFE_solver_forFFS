@@ -47,6 +47,14 @@ std::string formatBytes(std::size_t bytes);
 //   log.summary();                                     // table at end
 class Logger {
 public:
+    struct PhaseSnapshot {
+        std::string name;
+        double elapsedSec = 0.0;
+        MemoryStats startMem{};
+        MemoryStats endMem{};
+        bool closed = false;
+    };
+
     explicit Logger(std::ostream& consoleStream);
     ~Logger();
 
@@ -87,6 +95,12 @@ public:
 
     // Print the per-phase + total summary table.
     void summary();
+
+    // Read-only copy of the phase timing/memory records. If the current
+    // phase is still open, its elapsed time and memory snapshot are measured
+    // at call time without closing the phase. This keeps run.json/timing.json
+    // in sync with the human-readable run.log summary.
+    std::vector<PhaseSnapshot> phaseSnapshots() const;
 
     // Dump the last bufferedLines + active phase + active context into a
     // separate .crash.log next to the main log. Safe to call inside

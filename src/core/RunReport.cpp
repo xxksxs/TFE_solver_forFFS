@@ -125,6 +125,15 @@ private:
     bool suppressIndent_ = false;
 };
 
+std::string optionValue(const RunReport& report, const std::string& key) {
+    for (const auto& [k, v] : report.options) {
+        if (k == key) {
+            return v;
+        }
+    }
+    return {};
+}
+
 }  // namespace
 
 void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options) {
@@ -150,10 +159,27 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("fieldOutputOrder", std::to_string(options.fieldOutputOrder));
     add("tolerance", std::to_string(options.tolerance));
     add("writeAllFields", options.writeAllFields ? "true" : "false");
-    add("sweepStrategy",
-        options.sweepStrategy == SweepStrategy::Direct ? "direct" : "alps");
+    {
+        std::string s = "direct";
+        switch (options.sweepStrategy) {
+            case SweepStrategy::Direct: s = "direct"; break;
+            case SweepStrategy::Alps:   s = "alps"; break;
+            case SweepStrategy::Awe:    s = "awe"; break;
+            case SweepStrategy::Mgawe:  s = "mgawe"; break;
+            case SweepStrategy::Wcawe:  s = "wcawe"; break;
+        }
+        add("sweepStrategy", s);
+    }
     add("alpsKrylovOrder", std::to_string(options.alpsKrylovOrder));
     add("alpsExpansionFrequencyHz", std::to_string(options.alpsExpansionFrequencyHz));
+    add("aweOrder", std::to_string(options.aweOrder));
+    add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));
+    add("mgawePointCount", std::to_string(options.mgawePointCount));
+    add("mgaweOrder", std::to_string(options.mgaweOrder));
+    add("mgaweDropTolerance", std::to_string(options.mgaweDropTolerance));
+    add("wcaweOrder", std::to_string(options.wcaweOrder));
+    add("wcaweExpansionFrequencyHz", std::to_string(options.wcaweExpansionFrequencyHz));
+    add("wcaweDropTolerance", std::to_string(options.wcaweDropTolerance));
     add("portMethod",
         options.portMethod == PortMethod::Analytic    ? "analytic"
       : options.portMethod == PortMethod::Transfinite ? "tfe"
@@ -199,6 +225,8 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
       w.key("memory");           w.value(report.memoryDescription);
       w.key("cmdline");          w.value(report.commandLine);
       w.key("cwd");              w.value(report.workingDirectory);
+      w.key("sweep_strategy");   w.value(report.sweepStrategyName);
+      w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
 
       w.key("options");
       w.beginObject();
@@ -237,6 +265,53 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
 
       w.key("total_elapsed_s"); w.value(report.totalElapsedSec);
       w.key("peak_memory_mb");  w.value(report.peakMemoryMb);
+    w.endObject();
+    out << "\n";
+    out.flush();
+    return out.good();
+}
+
+bool writeTimingReport(const std::filesystem::path& path, const RunReport& report) {
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out.good()) {
+        return false;
+    }
+
+    double totalAssembleSec = 0.0;
+    double totalSolveSec = 0.0;
+    for (const auto& fp : report.sweep) {
+        totalAssembleSec += fp.assembleSec;
+        totalSolveSec += fp.solveSec;
+    }
+
+    JsonWriter w(out);
+    w.beginObject();
+      w.key("schema");              w.value(1);
+      w.key("status");              w.value(report.status);
+      w.key("algorithm");           w.value(report.sweepStrategyName.empty()
+                                              ? optionValue(report, "sweepStrategy")
+                                              : report.sweepStrategyName);
+      w.key("basis_order");         w.value(optionValue(report, "basisOrder"));
+      w.key("max_sweep_points");    w.value(optionValue(report, "maxSweepPoints"));
+      w.key("linear_solver");       w.value(optionValue(report, "linearSolver"));
+      w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
+      w.key("preconditioner");      w.value(optionValue(report, "preconditioner"));
+      w.key("total_elapsed_s");     w.value(report.totalElapsedSec);
+      w.key("peak_memory_mb");      w.value(report.peakMemoryMb);
+      w.key("frequency_points");    w.value(report.sweep.size());
+      w.key("total_assemble_s");    w.value(totalAssembleSec);
+      w.key("total_solve_s");       w.value(totalSolveSec);
+      w.key("phases");
+      w.beginArray();
+        for (const auto& p : report.phases) {
+            w.beginObject();
+              w.key("name");           w.value(p.name);
+              w.key("elapsed_s");      w.value(p.elapsedSec);
+              w.key("end_current_mb"); w.value(p.endCurrentMb);
+              w.key("end_peak_mb");    w.value(p.endPeakMb);
+            w.endObject();
+        }
+      w.endArray();
     w.endObject();
     out << "\n";
     out.flush();

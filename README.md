@@ -55,7 +55,7 @@ include/bpfem/
   fem/        Nedelec 边拓扑和 curl-curl FEM 装配（含 NPM）
   bc/         IBoundaryCondition 抽象 + WavePortBC + Absorbing/Impedance/FiniteConductor 占位
   linalg/     SparseMatrix + ISparseSolver / IPreconditioner 抽象 + 后端实现
-  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep
+  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep + AweSweep + MgaweSweep + WcaweSweep
   factory/    SparseSolverFactory + SweepStrategyFactory（按 Options 路由）
   apm/        解析端口模 (Analytic Port Mode)
   tfe/        超限元端口模 (Transfinite Element)
@@ -110,6 +110,33 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 ```
 
 该路径在 BP filter 基准上 101 频点扫频从 ~22 min 降到 ~104 s（加速 ~12×），与 `--sweep direct` 在所有频点的 S 参数偏差 < 1e-10。当前为 MVP 版本（单展开点 + 复对称 Galerkin + 仅 lossless 材料）；详见 `docs/optimization/alps-sweep/plan.md`。
+
+## 快速扫频（AWE / MGAWE / WCAWE）
+
+单点 Padé AWE：
+
+```powershell
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe
+```
+
+多点 Galerkin AWE（MGAWE）：
+
+```powershell
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe
+```
+
+良条件 AWE（WCAWE）：
+
+```powershell
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe
+```
+
+- `--mgawe-points`：在扫频区间内自动均匀选择展开点，例如 3 点对应左端、中心、右端。
+- `--mgawe-order`：每个展开点生成的局部 AWE 矩向量数量。
+- MGAWE 会把所有局部矩向量正交化成一个统一 Galerkin ROM，不是多个局部模型拼接。
+- `--wcawe-order`：单展开点 WCAWE 的目标良条件基维度。
+- WCAWE 会输出 `basis_condition.csv`，记录传统 AWE 矩基与 WCAWE 正交基的条件曲线。
+- 每次运行都会输出 `run.log`、`run.json` 和 `timing.json`，可用于和 direct / ALPS / AWE 做时间与峰值内存对比。
 
 ## 端口建模选择（NPM / APM / TFE）
 

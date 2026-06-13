@@ -8,6 +8,7 @@
 #include "bpfem/post/ResultExtractor.hpp"
 
 #include <complex>
+#include <filesystem>
 #include <functional>
 #include <vector>
 
@@ -26,6 +27,7 @@ struct SweepContext {
     const ResultExtractor& extractor;
     linalg::ISparseSolver& solver;
     Logger& log;
+    std::filesystem::path outputDirectory;
 
     // Per-frequency callback invoked by direct-style strategies after a
     // successful solve. ALPS-style strategies may ignore it (no per-frequency

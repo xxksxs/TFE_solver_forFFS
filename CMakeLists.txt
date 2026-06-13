@@ -27,6 +27,8 @@ add_library(bp_fem_core STATIC
     src/core/Utilities.cpp
     src/factory/SparseSolverFactory.cpp
     src/factory/SweepStrategyFactory.cpp
+    src/fastsweep/PadeApproximant.cpp
+    src/fastsweep/PolynomialMomentRecurrence.cpp
     src/fem/EdgeTopology.cpp
     src/fem/FEMAssembler.cpp
     src/fem/PortModeSolver.cpp
@@ -44,7 +46,10 @@ add_library(bp_fem_core STATIC
     src/post/OutputWriter.cpp
     src/post/ResultExtractor.cpp
     src/sweep/AlpsSweep.cpp
+    src/sweep/AweSweep.cpp
     src/sweep/DirectSweep.cpp
+    src/sweep/MgaweSweep.cpp
+    src/sweep/WcaweSweep.cpp
     src/tfe/TransfiniteElementBuilder.cpp
 )
 
