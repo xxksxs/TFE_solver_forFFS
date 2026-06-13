@@ -110,12 +110,14 @@ Options parseOptions(int argc, char** argv) {
                 options.sweepStrategy = SweepStrategy::Alps;
             } else if (mode == "awe") {
                 options.sweepStrategy = SweepStrategy::Awe;
+            } else if (mode == "gawe") {
+                options.sweepStrategy = SweepStrategy::Gawe;
             } else if (mode == "mgawe") {
                 options.sweepStrategy = SweepStrategy::Mgawe;
             } else if (mode == "wcawe") {
                 options.sweepStrategy = SweepStrategy::Wcawe;
             } else {
-                throw std::runtime_error("--sweep must be 'direct', 'alps', 'awe', 'mgawe', or 'wcawe'");
+                throw std::runtime_error("--sweep must be 'direct', 'alps', 'awe', 'gawe', 'mgawe', or 'wcawe'");
             }
         } else if (arg == "--alps-krylov-order") {
             options.alpsKrylovOrder = std::stoi(requireValue(arg));
@@ -136,6 +138,21 @@ Options parseOptions(int argc, char** argv) {
             options.aweExpansionFrequencyHz = std::stod(requireValue(arg));
             if (options.aweExpansionFrequencyHz <= 0.0) {
                 throw std::runtime_error("--awe-expansion must be > 0 Hz");
+            }
+        } else if (arg == "--gawe-order") {
+            options.gaweOrder = std::stoi(requireValue(arg));
+            if (options.gaweOrder < 1) {
+                throw std::runtime_error("--gawe-order must be >= 1");
+            }
+        } else if (arg == "--gawe-expansion") {
+            options.gaweExpansionFrequencyHz = std::stod(requireValue(arg));
+            if (options.gaweExpansionFrequencyHz <= 0.0) {
+                throw std::runtime_error("--gawe-expansion must be > 0 Hz");
+            }
+        } else if (arg == "--gawe-drop-tolerance") {
+            options.gaweDropTolerance = std::stod(requireValue(arg));
+            if (options.gaweDropTolerance <= 0.0) {
+                throw std::runtime_error("--gawe-drop-tolerance must be > 0");
             }
         } else if (arg == "--mgawe-points") {
             options.mgawePointCount = std::stoi(requireValue(arg));
@@ -217,9 +234,10 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--max-sweep-points 21] [--max-iterations 400] [--tolerance 1e-7]\n"
                       << "                     [--basis-order 0|1] [--field-output-order 1|2|3]\n"
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
-                      << "                     [--sweep direct|alps|awe|mgawe|wcawe]\n"
+                      << "                     [--sweep direct|alps|awe|gawe|mgawe|wcawe]\n"
                       << "                     [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"
                       << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"
+                      << "                     [--gawe-order 12] [--gawe-expansion <Hz>] [--gawe-drop-tolerance 1e-10]\n"
                       << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"
                       << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12]\n"
                       << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"

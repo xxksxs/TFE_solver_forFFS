@@ -165,6 +165,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
             case SweepStrategy::Direct: s = "direct"; break;
             case SweepStrategy::Alps:   s = "alps"; break;
             case SweepStrategy::Awe:    s = "awe"; break;
+            case SweepStrategy::Gawe:   s = "gawe"; break;
             case SweepStrategy::Mgawe:  s = "mgawe"; break;
             case SweepStrategy::Wcawe:  s = "wcawe"; break;
         }
@@ -174,6 +175,9 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("alpsExpansionFrequencyHz", std::to_string(options.alpsExpansionFrequencyHz));
     add("aweOrder", std::to_string(options.aweOrder));
     add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));
+    add("gaweOrder", std::to_string(options.gaweOrder));
+    add("gaweExpansionFrequencyHz", std::to_string(options.gaweExpansionFrequencyHz));
+    add("gaweDropTolerance", std::to_string(options.gaweDropTolerance));
     add("mgawePointCount", std::to_string(options.mgawePointCount));
     add("mgaweOrder", std::to_string(options.mgaweOrder));
     add("mgaweDropTolerance", std::to_string(options.mgaweDropTolerance));

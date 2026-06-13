@@ -9,6 +9,7 @@ enum class SweepStrategy {
     Direct,  // legacy per-frequency direct solve
     Alps,    // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)
     Awe,     // Asymptotic Waveform Evaluation (single-point Padé MVP)
+    Gawe,    // Galerkin AWE (single-point moment basis ROM)
     Mgawe,   // Multipoint Galerkin AWE (global reduced basis)
     Wcawe    // Well-Conditioned AWE (orthogonalized moment basis)
 };
@@ -69,6 +70,9 @@ struct Options {
     double alpsExpansionFrequencyHz = 0.0;  // 0 means "use band center"
     int aweOrder = 8;                       // q for [q-1/q] Padé
     double aweExpansionFrequencyHz = 0.0;   // 0 means "use band center"
+    int gaweOrder = 12;                     // single-point Galerkin AWE basis size
+    double gaweExpansionFrequencyHz = 0.0;  // 0 means "use band center"
+    double gaweDropTolerance = 1.0e-10;     // MGS deflation threshold
     int mgawePointCount = 3;                // number of expansion points
     int mgaweOrder = 8;                     // local moment count per expansion point
     double mgaweDropTolerance = 1.0e-10;    // global basis deflation threshold

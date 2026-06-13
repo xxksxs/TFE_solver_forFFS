@@ -1,9 +1,9 @@
-# AWE / MGAWE / WCAWE 快速扫频算法族
+# AWE / GAWE / MGAWE / WCAWE 快速扫频算法族
 
-本文档组记录 AWE、MGAWE、WCAWE 三类 FEM 快速扫频算法的工程 skill。它们的共同目标是：
+本文档组记录 AWE、GAWE、MGAWE、WCAWE 四类 FEM 快速扫频算法的工程 skill。它们的共同目标是：
 在少量展开点上提取矩信息，构造低阶传递模型，从而避免对每个频率点都进行一次完整 FEM 求解。
 
-本轮文档只定义算法、输入输出、模块边界和可靠性验证，不实现 `--sweep awe|mgawe|wcawe`。
+本轮文档定义算法、输入输出、模块边界和可靠性验证；当前工程已逐步接入 `--sweep awe|gawe|mgawe|wcawe`。
 
 ## 论文对齐后的定位
 
@@ -11,9 +11,10 @@
 
 1. **AWE**：在单个展开波数/频率附近对 FEM 解向量做 Taylor 矩递推，再把感兴趣的标量响应
    转成 Padé 有理函数。输出通常是输入阻抗、S 参数、远场或某个场分量。
-2. **MGAWE**：把多个展开点产生的 AWE/GAWE 向量一起正交化，形成统一 Galerkin 降阶空间。
+2. **GAWE**：在单个展开点生成 AWE 矩向量，正交化后构造 Galerkin 降阶空间。它不走 Padé 标量外推，而是在线求解小型 reduced FEM 系统。
+3. **MGAWE**：把多个展开点产生的 AWE/GAWE 向量一起正交化，形成统一 Galerkin 降阶空间。
    重点是宽带精度和残差正交，不是多个局部 ROM 的简单拼接。
-3. **WCAWE**：全称是 **Well-Conditioned Asymptotic Waveform Evaluation**。它通过非奇异上三角
+4. **WCAWE**：全称是 **Well-Conditioned Asymptotic Waveform Evaluation**。它通过非奇异上三角
    系数矩阵把传统 AWE 矩向量组合为良条件基；当系数矩阵取单位阵时退化为 AWE，当系数来自
    modified Gram-Schmidt 时得到稳定的 Arnoldi-like 过程。
 
@@ -32,6 +33,7 @@ include/bpfem/fastsweep/
   WellConditionedBasisBuilder.hpp
   ReliabilityDiagnostics.hpp
   AweSweep.hpp
+  GaweSweep.hpp
   MgaweSweep.hpp
   WcaweSweep.hpp
 
@@ -42,6 +44,7 @@ src/fastsweep/
   WellConditionedBasisBuilder.cpp
   ReliabilityDiagnostics.cpp
   AweSweep.cpp
+  GaweSweep.cpp
   MgaweSweep.cpp
   WcaweSweep.cpp
 ```
@@ -59,6 +62,7 @@ src/fastsweep/
 ## Skill 列表
 
 - [AWE skill](awe-skill.md)：单展开点系统矩递推 + Padé 极点留数近似。
+- GAWE：单展开点系统矩递推 + 正交化 Galerkin ROM；工程上可复用 MGAWE 的单点路径。
 - [MGAWE skill](mgawe-skill.md)：多个展开点同时构造统一 Galerkin 降阶空间。
 - [WCAWE skill](wcawe-skill.md)：良条件 AWE，通过上三角正交化系数稳定矩基。
 - [统一校验方法](validation.md)：三类算法进入实现前后的数值可靠性和工程验收。
@@ -66,7 +70,7 @@ src/fastsweep/
 ## 与现有 ALPS/Krylov 文档的关系
 
 当前 `--sweep alps` 已实现单展开点、块 shift-and-invert Krylov、复对称 Galerkin ROM。它和
-MGAWE/WCAWE 的工程基础高度重合：都需要仿射系统、展开点因式分解、基生成、正交化、投影和
+GAWE/MGAWE/WCAWE 的工程基础高度重合：都需要仿射系统、展开点因式分解、基生成、正交化、投影和
 S 参数还原。
 
 建议演进顺序：

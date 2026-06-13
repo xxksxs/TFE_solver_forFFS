@@ -92,17 +92,18 @@ DDM 实现拨入 Phase 3。
 
 **落地状态**：单点 Padé 风格 ALPS（PRIMA/Galerkin 路径）已经合入主干。CLI `--sweep alps` 启用，详见 `alps-sweep/plan.md`；BP filter 基准 101 点扫频加速 ~12×，与 direct 偏差 < 1e-10。
 
-AWE / MGAWE / WCAWE 已接入 CLI：
+AWE / GAWE / MGAWE / WCAWE 已接入 CLI：
 
 ```powershell
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe
 ```
 
-其中 MGAWE 使用多个展开点的局部 AWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 使用单展开点传统 AWE 矩序列生成良条件正交基，并输出 `basis_condition.csv` 记录 AWE/WCAWE 条件曲线。下一步是多点 WCAWE 和自适应展开点。
+其中 GAWE 是单展开点 Galerkin AWE：先生成局部 AWE 矩向量，再正交化并投影为一个 ROM；MGAWE 使用多个展开点的局部 AWE/GAWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 使用单展开点传统 AWE 矩序列生成良条件正交基，并输出 `basis_condition.csv` 记录 AWE/WCAWE 条件曲线。下一步是多点 WCAWE 和自适应展开点。
 
-AWE / MGAWE / WCAWE 的模块化算法 skill 与校验方法见 `awe-family/README.md`。这组文档把显式 Padé AWE、多点 Galerkin AWE 和良条件 AWE 拆成可独立实现、可抽离的 fast-sweep 子模块。
+AWE / GAWE / MGAWE / WCAWE 的模块化算法 skill 与校验方法见 `awe-family/README.md`。这组文档把显式 Padé AWE、单点/多点 Galerkin AWE 和良条件 AWE 拆成可独立实现、可抽离的 fast-sweep 子模块。
 
 落地接口：
 
@@ -121,9 +122,10 @@ struct SweepStrategy {
 |------|--------|------|------|
 | 自适应频点加密 | 高 | M | 计划中 |
 | AWE 单点 Padé / ALPS Galerkin | 高 | M | **已实现 (`--sweep awe`, `--sweep alps`)** |
+| GAWE 单点 Galerkin AWE | 高 | S | **已实现 (`--sweep gawe`)** |
 | MGAWE 多点 Galerkin AWE | 高 | M | **已实现 (`--sweep mgawe`)** |
 | WCAWE 良条件 AWE | 高 | M | **已实现 (`--sweep wcawe`)** |
-| AWE / MGAWE / WCAWE 模块化 skill 与校验 | 高 | S | **已规划并落地 (`awe-family/`)** |
+| AWE / GAWE / MGAWE / WCAWE 模块化 skill 与校验 | 高 | S | **已规划并落地 (`awe-family/`)** |
 | Krylov MOR 多点 | 高 | L | 计划中 |
 | Pole-residue 输出 + 任意频评估 | 中 | M |
 

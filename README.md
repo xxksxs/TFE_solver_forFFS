@@ -55,7 +55,7 @@ include/bpfem/
   fem/        Nedelec 边拓扑和 curl-curl FEM 装配（含 NPM）
   bc/         IBoundaryCondition 抽象 + WavePortBC + Absorbing/Impedance/FiniteConductor 占位
   linalg/     SparseMatrix + ISparseSolver / IPreconditioner 抽象 + 后端实现
-  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep + AweSweep + MgaweSweep + WcaweSweep
+  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep + AweSweep + GaweSweep + MgaweSweep + WcaweSweep
   factory/    SparseSolverFactory + SweepStrategyFactory（按 Options 路由）
   apm/        解析端口模 (Analytic Port Mode)
   tfe/        超限元端口模 (Transfinite Element)
@@ -111,12 +111,18 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 
 该路径在 BP filter 基准上 101 频点扫频从 ~22 min 降到 ~104 s（加速 ~12×），与 `--sweep direct` 在所有频点的 S 参数偏差 < 1e-10。当前为 MVP 版本（单展开点 + 复对称 Galerkin + 仅 lossless 材料）；详见 `docs/optimization/alps-sweep/plan.md`。
 
-## 快速扫频（AWE / MGAWE / WCAWE）
+## 快速扫频（AWE / GAWE / MGAWE / WCAWE）
 
 单点 Padé AWE：
 
 ```powershell
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe
+```
+
+单点 Galerkin AWE（GAWE）：
+
+```powershell
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe
 ```
 
 多点 Galerkin AWE（MGAWE）：
@@ -131,6 +137,8 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe
 ```
 
+- `--gawe-order`：单展开点生成并正交化的 AWE 矩向量数量，用于构造一个 Galerkin ROM。
+- `--gawe-expansion`：GAWE 展开频率；不指定时默认取扫频区间中心。
 - `--mgawe-points`：在扫频区间内自动均匀选择展开点，例如 3 点对应左端、中心、右端。
 - `--mgawe-order`：每个展开点生成的局部 AWE 矩向量数量。
 - MGAWE 会把所有局部矩向量正交化成一个统一 Galerkin ROM，不是多个局部模型拼接。

@@ -18,6 +18,7 @@
 #include "bpfem/sweep/AlpsSweep.hpp"
 #include "bpfem/sweep/AweSweep.hpp"
 #include "bpfem/sweep/DirectSweep.hpp"
+#include "bpfem/sweep/GaweSweep.hpp"
 #include "bpfem/sweep/MgaweSweep.hpp"
 #include "bpfem/sweep/WcaweSweep.hpp"
 
@@ -47,6 +48,14 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
             aweOpts.expansionFrequencyHz = options.aweExpansionFrequencyHz;
             return std::make_unique<sweep::AweSweep>(project, assembler, portModeSolver,
                                                      aweOpts);
+        }
+        case SweepStrategy::Gawe: {
+            sweep::GaweOptions gaweOpts;
+            gaweOpts.order = options.gaweOrder;
+            gaweOpts.expansionFrequencyHz = options.gaweExpansionFrequencyHz;
+            gaweOpts.dropTolerance = options.gaweDropTolerance;
+            return std::make_unique<sweep::GaweSweep>(project, assembler, portModeSolver,
+                                                      gaweOpts);
         }
         case SweepStrategy::Mgawe: {
             sweep::MgaweOptions mgaweOpts;

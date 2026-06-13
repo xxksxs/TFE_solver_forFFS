@@ -48,6 +48,7 @@ add_library(bp_fem_core STATIC
     src/sweep/AlpsSweep.cpp
     src/sweep/AweSweep.cpp
     src/sweep/DirectSweep.cpp
+    src/sweep/GaweSweep.cpp
     src/sweep/MgaweSweep.cpp
     src/sweep/WcaweSweep.cpp
     src/tfe/TransfiniteElementBuilder.cpp

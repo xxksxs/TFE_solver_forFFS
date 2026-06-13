@@ -40,7 +40,7 @@
 - **`strategy-interfaces/api.md`**：四个抽象接口的契约说明（参数、调用顺序、错误模型）。
 - **`strategy-interfaces/example.md`**：加新策略的完整示例（以 ImpedanceBC 为例）。
 - **`alps-sweep/plan.md`**：单点 ALPS Krylov MOR。**已落地**。
-- **`awe-family/README.md`**：AWE / MGAWE / WCAWE 快速扫频算法族。**设计中**。
+- **`awe-family/README.md`**：AWE / GAWE / MGAWE / WCAWE 快速扫频算法族。**持续实现中**。
 - **`analytic-port/plan.md`**：解析端口模 (APM)。**已落地**。
 - **`transfinite-element/tfe-plan.md`**：超限元数值多模端口 (TFE)。**已落地**。
 

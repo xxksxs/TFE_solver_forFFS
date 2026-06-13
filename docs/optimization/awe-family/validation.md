@@ -1,4 +1,4 @@
-# AWE / MGAWE / WCAWE 统一校验方法
+# AWE / GAWE / MGAWE / WCAWE 统一校验方法
 
 任何快速扫频算法进入实现前后，都必须同时通过数学单测、论文一致性检查、项目集成测试、HFSS 基准对比和失效诊断。
 本文件定义校验口径；其中 HFSS 文件是 BP filter 的外部物理基准，direct FEM 结果是工程回归和定位问题用的内部基准。
@@ -33,7 +33,7 @@ BP filter 的默认工程目标：
 
 - direct FEM 对 HFSS：全频带 `max |abs_err| <= 2e-2`，且通带附近 `max |db_err| <= 0.2 dB`。
 - AWE 单展开点：展开点必须与 HFSS/direct 同阶吻合；窄带内按 3.1 验收。
-- MGAWE/WCAWE 或自适应多点 AWE：40--43 GHz 全带按 3.2/3.3 验收。
+- GAWE/MGAWE/WCAWE 或自适应多点 AWE：40--43 GHz 全带按 3.2/3.3 验收。
 
 ## 1. 数学单测
 
@@ -99,6 +99,7 @@ BP filter 的默认工程目标：
 
 ```powershell
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe_5
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe_5
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep mgawe --mgawe-points 3 --mgawe-order 20 --no-write-all-fields --out results_mgawe_5
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep wcawe --wcawe-order 30 --no-write-all-fields --out results_wcawe_5
 ```
@@ -112,12 +113,12 @@ BP filter 的默认工程目标：
 - 阈值：相对 HFSS CSV 的 `max delta |S11|, |S21| <= 0.01 dB`；同时抽检 direct FEM，确认误差不是由 FEM/HFSS 基准差异引入。
 - 若扫到 40--43 GHz 全带，允许失败，但必须通过极点位置、残差或 direct 抽检说明超出单点有效带宽。
 
-### 3.2 MGAWE 宽带
+### 3.2 GAWE / MGAWE 宽带
 
 - 频带：40--43 GHz。
-- 初始展开点：左端、中心、右端。
+- GAWE 初始展开点：中心点；MGAWE 初始展开点：左端、中心、右端。
 - 阈值：相对 HFSS CSV 的 `max delta |S11|, |S21| <= 0.05 dB`。
-- 展开点处必须接近 direct；频带内最大误差应随展开点数量或局部阶数增加而下降。
+- 展开点处必须接近 direct；频带内最大误差应随 GAWE 阶数、MGAWE 展开点数量或局部阶数增加而下降。
 - 必须记录每个展开点贡献的保留列数和 deflation 列数。
 
 ### 3.3 WCAWE 良条件宽带
@@ -146,7 +147,7 @@ BP filter 的默认工程目标：
 
 - AWE 的 Padé Hankel 条件数过高，例如 `cond > 1e12`。
 - Padé 极点落在目标频带内或离采样点过近。
-- MGAWE 全局基正交性恶化或 deflation 过多。
+- GAWE/MGAWE 全局基正交性恶化或 deflation 过多。
 - WCAWE 上三角系数矩阵 `R` 接近奇异。
 - WCAWE 未能改善传统 AWE 矩基条件数。
 - ROM 小系统奇异或条件数异常。
@@ -161,7 +162,7 @@ BP filter 的默认工程目标：
 - `hfss_comparison.csv`：与 `S Parameter Plot 1.csv` 对齐后的外部基准误差。
 - `diagnostics.json`：算法参数、展开点、阶数、残差、极点、正交性、direct 抽检误差。
 - `timing.json`：offline、basis、projection、online 的耗时。
-- `basis_condition.csv`：AWE/MGAWE/WCAWE 基条件数；WCAWE 必须包含 AWE 和 WCAWE 两列对照。
+- `basis_condition.csv`：AWE/GAWE/MGAWE/WCAWE 基条件数；WCAWE 必须包含 AWE 和 WCAWE 两列对照。
 - `direct_comparison.csv`：direct 抽检频点上的幅度误差、相位误差和残差。
 
-这些文件让 AWE、MGAWE、WCAWE 即使将来抽离成独立库，也能继续复用本工程的 BP filter 基准。
+这些文件让 AWE、GAWE、MGAWE、WCAWE 即使将来抽离成独立库，也能继续复用本工程的 BP filter 基准。
