@@ -85,13 +85,13 @@ public:
 cmake --build build_mkl --config Release
 
 # 5 频点 direct - 确认与 main 字节一致
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 5 --basis-order 1 --no-write-all-fields --out results_step2_direct
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 5 --basis-order 1 --no-write-all-fields --out result
 
 # 101 频点 ALPS（TFE multi-mode 走 affine 路径）
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out results_step2_alps
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out result
 
 # APM 单频点对照
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --basis-order 1 --port-method analytic --no-write-all-fields --out results_step2_apm
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --basis-order 1 --port-method analytic --no-write-all-fields --out result
 ```
 
 三个 CSV 与 main 分支对应输出 max\|Δ\|S\| < 1e-12（机器精度）。

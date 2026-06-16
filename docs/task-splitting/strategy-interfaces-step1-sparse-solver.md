@@ -16,7 +16,7 @@
 - `../../include/bpfem/linalg/MklPardisoSolver.hpp`
 - `../../include/bpfem/linalg/BiCGStabSolver.hpp`
 - `../../src/app/Application.cpp`（看现 `#ifdef BPFEM_USE_MKL` 分支位置，约第 220–260 行）
-- `../../src/mor/AlpsSweep.cpp`（注意：内部直接 `new MklPardisoSolver`，本步骤**不**改它，留到 Step 4）
+- `../../src/sweep/AlpsSweep.cpp`（当前已通过 `ISparseSolver` 注入离线求解器，不再内部 `new MklPardisoSolver`）
 
 ## 可能修改文件
 
@@ -64,8 +64,8 @@ public:
 
 ```powershell
 cmake --build build_mkl --config Release
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 3 --basis-order 1 --no-write-all-fields --out results_step1
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 3 --basis-order 1 --no-write-all-fields --out results_step1_bicg --linear-solver bicgstab
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 3 --basis-order 1 --no-write-all-fields --out result
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 3 --basis-order 1 --no-write-all-fields --out result --linear-solver bicgstab
 ```
 
 第一条 CSV 应与 main 分支 `--max-sweep-points 3` 输出字节一致。第二条与 main 分支 `BPFEM_USE_MKL=OFF` 编译输出字节一致。
@@ -75,7 +75,7 @@ cmake --build build_mkl --config Release
 - **`MklPardisoSolver` 的 symbolic 缓存**：现有代码中扫频每个频点稀疏 pattern 不变（同一 `assembler.assemble` 返回同一 `SparsityPattern`），PARDISO 内部跳过 reorder。`PardisoBackend` 必须**持有同一个 `MklPardisoSolver` 实例跨 solve 调用**，不能每次 solve 都 new 一个。`rememberPatternForReuse(true)` 的语义就是它。
 - **Options 二进制兼容**：在 `Options` 末尾追加新字段，不要插中间，避免下游构造代码 misalign。
 - **CLI 兼容**：不传 `--linear-solver` 时行为与 main 完全一致。
-- **mor::AlpsSweep 不动**：它内部 `new MklPardisoSolver()` 留到 Step 4 一起重构。本 PR 别碰。
+- **AlpsSweep 状态**：当前实现位于 `src/sweep/AlpsSweep.cpp`，离线阶段使用 `ISparseSolver` 注入；旧 MOR 命名空间口径已过期。
 - **#ifdef 不能进 ISparseSolver.hpp 公共头**：`SparseSolverFactory.cpp` 是唯一允许出现 `#ifdef BPFEM_USE_MKL` 的地方。
 
 ## 估时

@@ -25,7 +25,7 @@
 - 输出根目录结构：
 
 ```
-results/
+result/
   s_parameters.csv
   s_parameters.s2p
   fields/
@@ -97,7 +97,7 @@ bindings/python/
   - `frequency`: f_Hz
   - `timing_ms`: ...
   - `metrics`: residual, iterations, nnz, dof
-- 输出 `results/reports/solver_log.json` 与人可读 `solver_log.txt`。
+- 输出 `result/reports/solver_log.json` 与人可读 `solver_log.txt`。
 - 扫频结束后自动生成 *summary HTML 报告*（包含 S 参数图 + 远场图 + 剖面）。
 
 ## 9. 错误信息与诊断

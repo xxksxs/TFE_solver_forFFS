@@ -30,8 +30,10 @@ struct SweepContext {
     std::filesystem::path outputDirectory;
 
     // Per-frequency callback invoked by direct-style strategies after a
-    // successful solve. ALPS-style strategies may ignore it (no per-frequency
-    // edge-DOF vector to publish). Default empty closure = no field output.
+    // successful solve. Fast-sweep ROM strategies usually ignore it and only
+    // publish SweepResult::lastEdgeDofs for field_last.vtu, avoiding one
+    // reconstructed full-space field per frequency. Default empty closure =
+    // no field output.
     using FieldSink = std::function<void(double frequencyHz,
                                          const std::vector<std::complex<double>>& edgeDofs)>;
     FieldSink onFieldSolved;
@@ -56,10 +58,8 @@ struct SweepContext {
 
 // Output of a sweep run.
 //
-// `lastEdgeDofs` is populated by direct-style strategies so Application can
-// write `field_last.vtu`. ALPS leaves it empty because its reduced model does
-// not retain a full-space basis; this is documented and unchanged from prior
-// behavior.
+// `lastEdgeDofs` is populated when a strategy can provide a representative
+// final full-space field so Application can write `field_last.vtu`.
 struct SweepResult {
     std::vector<SParameterPoint> points;
     std::vector<std::complex<double>> lastEdgeDofs;

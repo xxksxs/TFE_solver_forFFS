@@ -23,8 +23,8 @@
   - Intel oneMKL PARDISO 直接求解器
   - BiCGSTAB fallback
 - **结果输出**
-  - `results/s_parameters.csv`
-  - `results/field_last.vtu`
+  - `result/result_DIRECT/s_parameters.csv`
+  - `result/result_DIRECT/field_last.vtu`
   - 可选逐频点 VTU 场文件
 
 ## 使用 Visual Studio 或 CMake 构建
@@ -72,13 +72,15 @@ src/main.cpp               轻量入口
 ## 运行
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out results
+.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result
 ```
+
+`--out` 现在表示统一结果根目录。程序会按当前 sweep 自动写入固定子目录，例如 direct 写入 `result/result_DIRECT`，AWE 写入 `result/result_AWE`；每次运行前只清空对应算法子目录。
 
 默认使用零阶棱元。若要启用一阶层次棱元：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 1 --out results_basis1_first
+.\build\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 1 --out result
 ```
 
 快速检查可运行：
@@ -116,25 +118,25 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 单点 Padé AWE：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out result
 ```
 
 单点 Galerkin AWE（GAWE）：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out result
 ```
 
 多点 Galerkin AWE（MGAWE）：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out result
 ```
 
 良条件 AWE（WCAWE）：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out result
 ```
 
 - `--gawe-order`：单展开点生成并正交化的 AWE 矩向量数量，用于构造一个 Galerkin ROM。
@@ -144,7 +146,9 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 - MGAWE 会把所有局部矩向量正交化成一个统一 Galerkin ROM，不是多个局部模型拼接。
 - `--wcawe-order`：单展开点 WCAWE 的目标良条件基维度。
 - WCAWE 会输出 `basis_condition.csv`，记录传统 AWE 矩基与 WCAWE 正交基的条件曲线。
-- 每次运行都会输出 `run.log`、`run.json` 和 `timing.json`，可用于和 direct / ALPS / AWE 做时间与峰值内存对比。
+- 每次运行都会输出 `run.log`、`run.json`、`timing.json` 和 `diagnostics.json`，可用于和 direct / ALPS / AWE / GAWE / MGAWE / WCAWE 做时间、峰值内存、ROM 维度、deflation、正交性和无源性偏差对比。
+- WCAWE 额外输出 `basis_condition.csv`，其中包含传统 AWE 矩基条件代理、WCAWE 正交基条件代理、`R` 对角元和 `X≈VR` 重构误差。
+- HFSS 批量对比可使用 `scripts/compare_with_hfss.py "S Parameter Plot 1.csv" result/result_BENCHMARK --batch-root result`，脚本会扫描 `result/result_*` 中含 `s_parameters.csv` 的结果目录并输出 `benchmark_summary.csv`。
 
 ## 端口建模选择（NPM / APM / TFE）
 

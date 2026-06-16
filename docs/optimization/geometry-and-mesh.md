@@ -81,7 +81,7 @@ h / p / hp 细化               │
 
 ## 6. 网格诊断
 
-- 新增 `--mesh-report results/mesh_report.json`：包含点数、四面体数、min/max edge length、aspect ratio 直方图、退化单元列表。
+- 新增 `--mesh-report result/mesh_report.json`：包含点数、四面体数、min/max edge length、aspect ratio 直方图、退化单元列表。
 - 在 *AEDTParser* 加载完成后立即对比 AEDT port faceId 与网格 facetId，发现不匹配立刻报错（当前可能在求解阶段才被发现）。
 
 ## 7. 任务清单

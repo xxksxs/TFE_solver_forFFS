@@ -15,6 +15,9 @@ them against the HFSS reference. It reports:
 Usage:
     python compare_with_hfss.py <hfss_csv> <out_dir>
         --solver <label>=<csv> [--solver <label>=<csv> ...]
+
+    python compare_with_hfss.py <hfss_csv> <out_dir> --batch-root result
+        # scans immediate child directories containing s_parameters.csv
 """
 
 from __future__ import annotations
@@ -78,8 +81,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--solver",
         action="append",
-        required=True,
+        default=[],
         help="Solver run as label=path/to/csv. Repeatable.",
+    )
+    parser.add_argument(
+        "--batch-root",
+        type=Path,
+        help="Scan immediate child directories for s_parameters.csv and compare all runs.",
     )
     args = parser.parse_args(argv[1:])
 
@@ -88,7 +96,20 @@ def main(argv: list[str]) -> int:
 
     hfss = _load_hfss(args.hfss_csv)
     solver_runs = []
-    for spec in args.solver:
+    solver_specs = list(args.solver)
+    if args.batch_root is not None:
+        for child in sorted(args.batch_root.iterdir()):
+            csv_path = child / "s_parameters.csv"
+            if child.is_dir() and csv_path.exists():
+                label = child.name
+                if label.startswith("result_"):
+                    label = label[len("result_") :]
+                elif label.startswith("results_"):
+                    label = label[len("results_") :]
+                solver_specs.append(f"{label}={csv_path}")
+    if not solver_specs:
+        parser.error("provide at least one --solver label=csv or use --batch-root")
+    for spec in solver_specs:
         if "=" not in spec:
             parser.error(f"--solver must be label=path, got {spec}")
         label, path = spec.split("=", 1)
@@ -124,6 +145,7 @@ def main(argv: list[str]) -> int:
     summary_lines.append("")
 
     out_table = pd.DataFrame({"freq_GHz": grid, "S11_hfss": s11_ref, "S21_hfss": s21_ref})
+    summary_records = []
 
     # Plot 1: |S11| dB and |S21| dB overlay.
     fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
@@ -158,6 +180,30 @@ def main(argv: list[str]) -> int:
         summary_lines.append(_stats("|S11| lin", s11 - s11_ref, ""))
         summary_lines.append(_stats("|S21| lin", s21 - s21_ref, ""))
         summary_lines.append("")
+        summary_records.append(
+            {
+                "label": label,
+                "points": int(len(grid)),
+                "freq_min_GHz": float(f_lo),
+                "freq_max_GHz": float(f_hi),
+                "s21_peak_GHz": float(pf_s),
+                "s21_3db_lo_GHz": float(lo_s),
+                "s21_3db_hi_GHz": float(hi_s),
+                "s21_3db_center_shift_GHz": float((lo_s + hi_s) / 2 - (lo + hi) / 2),
+                "max_abs_db_s11": float(np.max(np.abs(s11_db - s11_ref_db))),
+                "mean_abs_db_s11": float(np.mean(np.abs(s11_db - s11_ref_db))),
+                "rms_db_s11": float(np.sqrt(np.mean((s11_db - s11_ref_db) ** 2))),
+                "max_abs_db_s21": float(np.max(np.abs(s21_db - s21_ref_db))),
+                "mean_abs_db_s21": float(np.mean(np.abs(s21_db - s21_ref_db))),
+                "rms_db_s21": float(np.sqrt(np.mean((s21_db - s21_ref_db) ** 2))),
+                "max_abs_lin_s11": float(np.max(np.abs(s11 - s11_ref))),
+                "mean_abs_lin_s11": float(np.mean(np.abs(s11 - s11_ref))),
+                "rms_lin_s11": float(np.sqrt(np.mean((s11 - s11_ref) ** 2))),
+                "max_abs_lin_s21": float(np.max(np.abs(s21 - s21_ref))),
+                "mean_abs_lin_s21": float(np.mean(np.abs(s21 - s21_ref))),
+                "rms_lin_s21": float(np.sqrt(np.mean((s21 - s21_ref) ** 2))),
+            }
+        )
 
     axes[0].set_ylabel("|S11| [dB]")
     axes[0].grid(True, alpha=0.4)
@@ -190,6 +236,9 @@ def main(argv: list[str]) -> int:
     plt.close(fig2)
 
     out_table.to_csv(out_dir / "tfe_compare.csv", index=False, float_format="%.10g")
+    pd.DataFrame(summary_records).to_csv(
+        out_dir / "benchmark_summary.csv", index=False, float_format="%.10g"
+    )
     summary = "\n".join(summary_lines)
     (out_dir / "tfe_compare.txt").write_text(summary, encoding="utf-8")
     print(summary)

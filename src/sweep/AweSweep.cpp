@@ -1,13 +1,14 @@
 #include "bpfem/sweep/AweSweep.hpp"
 
 #include "bpfem/core/Constants.hpp"
-#include "bpfem/fastsweep/PolynomialMomentRecurrence.hpp"
+#include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
+#include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
+#include "bpfem/fastsweep/PortModeUtilities.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
-#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -18,66 +19,6 @@ namespace fem::sweep {
 namespace {
 
 using Complex = std::complex<double>;
-
-std::vector<Complex> liftPortVector(const std::vector<std::pair<int, double>>& sparse,
-                                    std::size_t n) {
-    std::vector<Complex> out(n, Complex(0.0, 0.0));
-    for (const auto& [i, w] : sparse) {
-        if (i >= 0 && static_cast<std::size_t>(i) < n) {
-            out[static_cast<std::size_t>(i)] = w;
-        }
-    }
-    return out;
-}
-
-Complex bilinear(const std::vector<Complex>& a, const std::vector<Complex>& b) {
-    Complex sum(0.0, 0.0);
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        sum += a[i] * b[i];
-    }
-    return sum;
-}
-
-double binomialCoefficient(double alpha, int order) {
-    double out = 1.0;
-    for (int j = 1; j <= order; ++j) {
-        out *= (alpha - static_cast<double>(j - 1)) / static_cast<double>(j);
-    }
-    return out;
-}
-
-std::vector<double> shiftedPowerSeries(double base, double alpha, int count) {
-    if (base <= 0.0) {
-        throw std::runtime_error("AweSweep: expansion series base must be positive");
-    }
-    std::vector<double> coeffs(static_cast<std::size_t>(count), 0.0);
-    double invPower = 1.0;
-    for (int r = 0; r < count; ++r) {
-        coeffs[static_cast<std::size_t>(r)] = binomialCoefficient(alpha, r) * invPower;
-        invPower /= base;
-    }
-    return coeffs;
-}
-
-std::vector<double> convolve(const std::vector<double>& a, const std::vector<double>& b, int count) {
-    std::vector<double> out(static_cast<std::size_t>(count), 0.0);
-    for (int i = 0; i < count; ++i) {
-        double sum = 0.0;
-        for (int j = 0; j <= i; ++j) {
-            sum += a[static_cast<std::size_t>(j)] * b[static_cast<std::size_t>(i - j)];
-        }
-        out[static_cast<std::size_t>(i)] = sum;
-    }
-    return out;
-}
-
-double powInt(double x, int n) {
-    double out = 1.0;
-    for (int i = 0; i < n; ++i) {
-        out *= x;
-    }
-    return out;
-}
 
 }  // namespace
 
@@ -126,6 +67,21 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
         out.points.push_back(evaluate(f));
         out.lastFrequencyHz = f;
     }
+    if (!ctx.outputDirectory.empty()) {
+        fastsweep::FastSweepDiagnostics diag;
+        diag.algorithm = name();
+        diag.expansionFrequenciesHz = {expansionHz};
+        diag.requestedOrder = options_.order;
+        diag.padeInputPivotRatio = inputProjectionPade_.pivotRatio();
+        diag.padeOutputPivotRatio = outputProjectionPade_.pivotRatio();
+        diag.maxPassivityError = fastsweep::maxPassivityError(out.points);
+        const auto path = ctx.outputDirectory / "diagnostics.json";
+        if (fastsweep::writeDiagnosticsJson(path, diag)) {
+            ctx.log.info("Wrote " + path.string());
+        } else {
+            ctx.log.warn("Failed to write " + path.string());
+        }
+    }
     (void)ctx.onFieldSolved;
     return out;
 }
@@ -147,113 +103,14 @@ int AweSweep::buildOffline(double expansionFrequencyHz,
         throw std::runtime_error("AweSweep: lossy materials (sigma != 0) are not supported in this MVP. Use --sweep direct.");
     }
 
-    std::vector<Complex> rhs0;
-    SparseMatrix A0 = assembler_.assemble(expansionFrequencyHz_, rhs0);
-    if (rhs0.empty()) {
-        throw std::runtime_error("AweSweep: expansion RHS is empty");
-    }
-
-    auto solveAtExpansion = [&](const std::vector<Complex>& rhs) {
-        SolveResult result = solver.solve(A0, rhs, solverConfig);
-        return result.field;
-    };
-
     const int q = std::max(1, options_.order);
     const int momentCount = 2 * q;
-    const std::size_t fullDim = rhs0.size();
-    const int virtualPortCount = static_cast<int>(affine_.portCoupling.size());
-    std::vector<std::vector<Complex>> portVectors;
-    portVectors.reserve(static_cast<std::size_t>(virtualPortCount));
-    for (const auto& coupling : affine_.portCoupling) {
-        portVectors.push_back(liftPortVector(coupling, fullDim));
-    }
-
-    std::vector<std::vector<double>> admittanceCoeffs(
-        static_cast<std::size_t>(virtualPortCount),
-        std::vector<double>(static_cast<std::size_t>(momentCount), 0.0));
-    std::vector<std::vector<Complex>> rhsCoefficients(
-        static_cast<std::size_t>(momentCount),
-        std::vector<Complex>(fullDim, Complex(0.0, 0.0)));
-
-    for (int v = 0; v < virtualPortCount; ++v) {
-        const double kc2 = affine_.portCutoffSquared[static_cast<std::size_t>(v)];
-        const double betaBase = lambda0_ - kc2;
-        const bool propagatingAtExpansion = betaBase > 0.0;
-        const double seriesBase = propagatingAtExpansion ? betaBase : lambda0_;
-        const double scalar0 = std::sqrt(seriesBase);
-        const auto sqrtSeries = shiftedPowerSeries(seriesBase, 0.5, momentCount);
-        for (int r = 0; r < momentCount; ++r) {
-            admittanceCoeffs[static_cast<std::size_t>(v)][static_cast<std::size_t>(r)] =
-                scalar0 * sqrtSeries[static_cast<std::size_t>(r)] * powInt(lambdaScale_, r);
-        }
-
-        if (!affine_.isExcitationMode[static_cast<std::size_t>(v)]) {
-            continue;
-        }
-        const PortMode& mode = virtualPortMode(v);
-        const double s0 = powerNormalizationFactor(mode, expansionFrequencyHz_);
-        if (s0 <= 0.0) {
-            continue;
-        }
-        const int projectPort = affine_.projectPortIndex[static_cast<std::size_t>(v)];
-        const auto& port = project_.ports[static_cast<std::size_t>(projectPort)];
-        const Complex incident0 = std::polar(
-            std::sqrt(std::max(port.magnitudeW, 0.0)) * s0,
-            port.phaseDeg * pi / 180.0);
-        const Complex rhsFactor0 = Complex(0.0, 2.0 * admittanceCoeffs[static_cast<std::size_t>(v)][0])
-            * incident0;
-
-        // For propagating modes, RHS scalar is proportional to
-        // sqrt(beta(lambda) * omega(lambda)).
-        const auto betaQuarter = shiftedPowerSeries(seriesBase, 0.25, momentCount);
-        const auto lambdaQuarter = shiftedPowerSeries(lambda0_, 0.25, momentCount);
-        const auto rhsRatio = propagatingAtExpansion
-            ? convolve(betaQuarter, lambdaQuarter, momentCount)
-            : std::vector<double>(static_cast<std::size_t>(momentCount), 0.0);
-        for (int r = 0; r < momentCount; ++r) {
-            const Complex coeff = rhsFactor0
-                * rhsRatio[static_cast<std::size_t>(r)]
-                * powInt(lambdaScale_, r);
-            auto& br = rhsCoefficients[static_cast<std::size_t>(r)];
-            const auto& m = portVectors[static_cast<std::size_t>(v)];
-            for (std::size_t i = 0; i < fullDim; ++i) {
-                br[i] += coeff * m[i];
-            }
-        }
-    }
-    rhsCoefficients.front() = rhs0;
-
-    std::vector<fastsweep::PolynomialMomentRecurrence::LinearOperator> matrixCoefficientOperators;
-    matrixCoefficientOperators.reserve(static_cast<std::size_t>(momentCount - 1));
-    for (int r = 1; r < momentCount; ++r) {
-        matrixCoefficientOperators.push_back(
-            [this, r, &admittanceCoeffs, &portVectors, virtualPortCount](const std::vector<Complex>& x) {
-                std::vector<Complex> out(x.size(), Complex(0.0, 0.0));
-                if (r == 1) {
-                    std::vector<Complex> mx = affine_.M.multiply(x);
-                    for (std::size_t i = 0; i < out.size(); ++i) {
-                        out[i] -= lambdaScale_ * mx[i];
-                    }
-                }
-                for (int v = 0; v < virtualPortCount; ++v) {
-                    const double coeff =
-                        admittanceCoeffs[static_cast<std::size_t>(v)][static_cast<std::size_t>(r)];
-                    if (coeff == 0.0) {
-                        continue;
-                    }
-                    const auto& m = portVectors[static_cast<std::size_t>(v)];
-                    const Complex projection = bilinear(m, x);
-                    const Complex scale(0.0, coeff);
-                    for (std::size_t i = 0; i < out.size(); ++i) {
-                        out[i] += scale * projection * m[i];
-                    }
-                }
-                return out;
-            });
-    }
-
-    const auto fieldMoments = fastsweep::PolynomialMomentRecurrence::generatePolynomialMoments(
-        rhsCoefficients, matrixCoefficientOperators, solveAtExpansion);
+    const auto portVectors =
+        fastsweep::PolynomialPortMomentBuilder::buildPortVectors(affine_, affine_.K.size());
+    const auto fieldMoments =
+        fastsweep::PolynomialPortMomentBuilder::generateLosslessMoments(
+            project_, assembler_, portModeSolver_, affine_, expansionFrequencyHz_,
+            momentCount, solver, solverConfig, portVectors);
 
     std::vector<Complex> inputProjectionMoments;
     std::vector<Complex> outputProjectionMoments;
@@ -328,17 +185,7 @@ AweSweep::Complex AweSweep::portProjection(const std::vector<Complex>& edgeDofs,
 }
 
 const PortMode& AweSweep::virtualPortMode(int virtualPortIndex) const {
-    const int faceId = affine_.portFaceIds[static_cast<std::size_t>(virtualPortIndex)];
-    if (const auto* multi = portModeSolver_.multiMode(faceId); multi != nullptr) {
-        int modeIndex = 0;
-        for (int i = 0; i < virtualPortIndex; ++i) {
-            if (affine_.portFaceIds[static_cast<std::size_t>(i)] == faceId) {
-                ++modeIndex;
-            }
-        }
-        return multi->modes[static_cast<std::size_t>(modeIndex)];
-    }
-    return portModeSolver_.solve(faceId);
+    return fastsweep::virtualPortMode(portModeSolver_, affine_, virtualPortIndex);
 }
 
 }  // namespace fem::sweep

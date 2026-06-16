@@ -1,11 +1,14 @@
 #include "bpfem/sweep/DirectSweep.hpp"
 
+#include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
+
 #include <chrono>
 #include <complex>
 #include <iomanip>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fem::sweep {
 
@@ -75,6 +78,19 @@ SweepResult DirectSweep::run(const std::vector<double>& frequencies,
         ctx.log.popContext();
     }
 
+    if (!ctx.outputDirectory.empty()) {
+        fastsweep::FastSweepDiagnostics diag;
+        diag.algorithm = name();
+        diag.romDimension = static_cast<int>(out.lastEdgeDofs.size());
+        diag.reducedSolveSucceeded = true;
+        diag.maxPassivityError = fastsweep::maxPassivityError(out.points);
+        const auto path = ctx.outputDirectory / "diagnostics.json";
+        if (fastsweep::writeDiagnosticsJson(path, diag)) {
+            ctx.log.info("Wrote " + path.string());
+        } else {
+            ctx.log.warn("Failed to write " + path.string());
+        }
+    }
     return out;
 }
 

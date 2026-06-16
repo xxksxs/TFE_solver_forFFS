@@ -74,10 +74,10 @@ bp_filter/
 │   ├── task-splitting/
 │   └── development-workflow/
 ├── build*/
-└── results*/
+└── result/
 ```
 
-`build*/` 和 `results*/` 表示一组生成目录，而不是源码目录。实际工程中可见的 `build`、`build_nomkl`、`build_mkl_probe` 以及多个 `results_*` 目录都属于这一类。
+`build*/` 和 `result/` 表示一组生成目录，而不是源码目录。实际工程中可见的 `build`、`build_nomkl`、`build_mkl_probe` 以及多个 `result/result_<SWEEP>` 子目录都属于这一类。
 
 ## 顶层文件
 
@@ -117,7 +117,7 @@ bp_filter/
 - `build/`：默认 CMake/Visual Studio 构建目录，可能包含 Debug 与 Release 产物。
 - `build_nomkl/`：关闭 MKL 或用于无 MKL fallback 路径的构建目录。
 - `build_mkl_probe/`：用于探测或验证 MKL/PARDISO 配置的构建目录。
-- `results/` 与 `results_*`：求解输出目录，通常包含 `s_parameters.csv`、`field_last.vtu` 和按频点命名的 `field_<frequency>Hz.vtu`。
+- `result/`：求解输出目录，通常包含 `s_parameters.csv`、`field_last.vtu` 和按频点命名的 `field_<frequency>Hz.vtu`。
 
 这些目录可由构建或运行命令重新生成。修改源码或文档时，应避免把生成产物当作维护入口。
 
@@ -145,7 +145,7 @@ MklPardisoSolver or BiCGStabSolver
 ResultExtractor + OutputWriter
         |
         v
-results*/s_parameters.csv + results*/field_*.vtu
+result/result_<SWEEP>/s_parameters.csv + result/result_<SWEEP>/field_*.vtu
 ```
 
 ## 维护约定
@@ -153,4 +153,4 @@ results*/s_parameters.csv + results*/field_*.vtu
 - 新增公共数据结构时，优先放入 `include/bpfem/core/Types.hpp`，并同步检查解析、装配、后处理是否需要更新。
 - 新增模块时，保持 `include/bpfem/<module>/` 与 `src/<module>/` 的接口/实现对应关系，并在 `CMakeLists.txt` 中登记实现文件。
 - 修改端口、边界条件、自由度拓扑或 S 参数投影时，应同时检查 `fem` 与 `post` 模块，避免装配和后处理口径不一致。
-- 运行验证时，将输出写入新的 `results_*` 目录，便于和历史结果并排比较。
+- 运行验证时，将输出写入新的 `result/result_<SWEEP>` 子目录，便于和历史结果并排比较。

@@ -4,7 +4,7 @@
 
 ## 1. 现状（MVP 已落地）
 
-第一迭代实现已合入 `src/mor/AlpsSweep.cpp`，可用 CLI `--sweep alps` 启用。覆盖了 `theory-cn.tex` §5（单点 Padé via Lanczos）但简化为 **Galerkin（PRIMA）形式而非纯 Lanczos 三对角化**：
+第一迭代实现已合入 `src/sweep/AlpsSweep.cpp`，可用 CLI `--sweep alps` 启用。覆盖了 `theory-cn.tex` §5（单点 Padé via Lanczos）但当前工程口径明确为 **ALPS-Galerkin MVP**：使用 Krylov-Galerkin/PRIMA 形式，而不是完整 Lanczos-Padé 三对角化。
 
 - **基底构造**：单展开点 + 块 shift-and-invert Krylov，列式增长（每列做 modified Gram-Schmidt + 一次再正交化），避免显式块三对角矩阵。
 - **投影**：复对称 Galerkin（左右用同一个 V，bilinear 形式 `V^T A V`）。
@@ -30,7 +30,7 @@
 
 ```
 include/bpfem/mor/AlpsSweep.hpp   — 公开 API（AlpsOptions / AlpsSweep）
-src/mor/AlpsSweep.cpp             — 实现：buildOffline / evaluate
+src/sweep/AlpsSweep.cpp           — 实现：buildOffline / evaluate / reconstructField
 src/fem/FEMAssembler.cpp           — 新增 buildAffineSystem() 提供 K, M, m_p, k_c²
 ```
 

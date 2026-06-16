@@ -86,22 +86,22 @@ BP filter 的默认工程目标：
 先生成 direct 内部基准，并用 `S Parameter Plot 1.csv` 做 HFSS 外部基准对比：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep direct --no-write-all-fields --out results_direct_5
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep direct --no-write-all-fields --out result
 ```
 
 现有 ALPS 对照：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out results_alps_5
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out result
 ```
 
 未来新增算法后的目标命令示例：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe_5
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe_5
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep mgawe --mgawe-points 3 --mgawe-order 20 --no-write-all-fields --out results_mgawe_5
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep wcawe --wcawe-order 30 --no-write-all-fields --out results_wcawe_5
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep awe --awe-order 8 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep gawe --gawe-order 12 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep mgawe --mgawe-points 3 --mgawe-order 20 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep wcawe --wcawe-order 30 --no-write-all-fields --out result
 ```
 
 ## 3. 精度验收
@@ -160,9 +160,10 @@ BP filter 的默认工程目标：
 
 - `s_parameters.csv`：S 参数结果。
 - `hfss_comparison.csv`：与 `S Parameter Plot 1.csv` 对齐后的外部基准误差。
-- `diagnostics.json`：算法参数、展开点、阶数、残差、极点、正交性、direct 抽检误差。
+- `diagnostics.json`：算法参数、展开点、阶数、ROM 维度、retained/deflated 列数、Padé pivot ratio、WCAWE `X≈VR` 重构误差、正交性、无源性最大偏差、reduced solve 状态。
 - `timing.json`：offline、basis、projection、online 的耗时。
-- `basis_condition.csv`：AWE/GAWE/MGAWE/WCAWE 基条件数；WCAWE 必须包含 AWE 和 WCAWE 两列对照。
+- `basis_condition.csv`：WCAWE 基条件数诊断；必须包含 AWE 矩基条件代理、WCAWE 正交基条件代理、`R` 对角元、正交性误差和 `X≈VR` 重构误差。
+- `benchmark_summary.csv`：`scripts/compare_with_hfss.py --batch-root` 生成的 direct/ALPS/AWE/GAWE/MGAWE/WCAWE 批量 HFSS 对比汇总。
 - `direct_comparison.csv`：direct 抽检频点上的幅度误差、相位误差和残差。
 
 这些文件让 AWE、GAWE、MGAWE、WCAWE 即使将来抽离成独立库，也能继续复用本工程的 BP filter 基准。

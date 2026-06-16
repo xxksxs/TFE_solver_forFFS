@@ -7,22 +7,22 @@
 在扫频中心附近运行一个频点：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out results_validation --max-sweep-points 1
+.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result --max-sweep-points 1
 ```
 
 ## 检查项
 
 - 求解残差。
 - 默认日志应显示 `Nedelec basis order: 0` 和 `Local basis functions per tetrahedron: 6`。
-- `results_validation/s_parameters.csv`。
-- `results_validation/field_last.vtu`。
+- `result/result_DIRECT/s_parameters.csv`。
+- `result/result_DIRECT/field_last.vtu`。
 
 ## 一阶层次棱元检查
 
 修改高阶基函数、拓扑或装配后，应额外运行：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out results_validation_basis1 --max-sweep-points 1 --basis-order 1
+.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result --max-sweep-points 1 --basis-order 1
 ```
 
 期望日志显示 `Nedelec basis order: 1` 和 `Local basis functions per tetrahedron: 20`。

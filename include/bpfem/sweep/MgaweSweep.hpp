@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/fastsweep/GalerkinReducedModel.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
@@ -48,6 +49,8 @@ public:
     int retainedColumns() const { return retainedColumns_; }
     int deflatedColumns() const { return deflatedColumns_; }
     bool ready() const { return ready_; }
+    double basisOrthogonalityError() const { return model_.basisOrthogonalityError(); }
+    bool reducedSolveSucceeded() const { return model_.lastSolveSucceeded(); }
 
 private:
     std::vector<std::vector<Complex>> buildLocalMoments(
@@ -76,9 +79,7 @@ private:
 
     FEMAssembler::AffineSystem affine_;
     std::vector<std::vector<Complex>> basis_;
-    std::vector<Complex> Ktilde_;
-    std::vector<Complex> Mtilde_;
-    std::vector<std::vector<Complex>> portModeReduced_;
+    fastsweep::GalerkinReducedModel model_;
 };
 
 }  // namespace fem::sweep

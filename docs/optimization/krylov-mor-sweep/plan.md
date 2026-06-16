@@ -176,7 +176,7 @@ tests/integration/
 --mor-q-max 80                                  # 单点 Krylov 最大长度
 --mor-validation-points 5                       # N_v
 --mor-residual-tolerance 1e-4                   # rho_alg 自适应阈值
---mor-write-rom results/rom.bin                 # 可选：导出 ROM 复用
+--mor-write-rom result/rom.bin                 # 可选：导出 ROM 复用
 ```
 
 YAML（待 P1 末交付，与 `optimization/usability.md` 计划一致）：

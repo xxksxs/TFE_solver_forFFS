@@ -58,6 +58,32 @@ std::vector<PhaseSummary> collectPhaseSummaries(const Logger& log) {
     return out;
 }
 
+std::string sweepOutputName(SweepStrategy strategy) {
+    switch (strategy) {
+        case SweepStrategy::Direct: return "DIRECT";
+        case SweepStrategy::Alps:   return "ALPS";
+        case SweepStrategy::Awe:    return "AWE";
+        case SweepStrategy::Gawe:   return "GAWE";
+        case SweepStrategy::Mgawe:  return "MGAWE";
+        case SweepStrategy::Wcawe:  return "WCAWE";
+    }
+    return "UNKNOWN";
+}
+
+std::filesystem::path runOutputDirectory(const Options& options) {
+    return options.outDir / ("result_" + sweepOutputName(options.sweepStrategy));
+}
+
+void prepareCleanOutputDirectory(const std::filesystem::path& path) {
+    if (path.empty()) {
+        throw std::runtime_error("Output directory must not be empty");
+    }
+    if (std::filesystem::exists(path)) {
+        std::filesystem::remove_all(path);
+    }
+    std::filesystem::create_directories(path);
+}
+
 }  // namespace
 
 // Parse the bp_fem_solver command line into an Options struct. Each option
@@ -230,7 +256,7 @@ Options parseOptions(int argc, char** argv) {
                 throw std::runtime_error("--gmres-restart must be >= 1");
             }
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: bp_fem_solver [--aedt wg_bp_filter.aedt] [--mesh current.ngmesh] [--out results]\n"
+            std::cout << "Usage: bp_fem_solver [--aedt wg_bp_filter.aedt] [--mesh current.ngmesh] [--out result]\n"
                       << "                     [--max-sweep-points 21] [--max-iterations 400] [--tolerance 1e-7]\n"
                       << "                     [--basis-order 0|1] [--field-output-order 1|2|3]\n"
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
@@ -282,8 +308,10 @@ int runApplication(int argc, char** argv) {
     try {
         log.banner();
 
-        const Options options = parseOptions(argc, argv);
-        std::filesystem::create_directories(options.outDir);
+        Options options = parseOptions(argc, argv);
+        const std::filesystem::path outputRoot = options.outDir;
+        options.outDir = runOutputDirectory(options);
+        prepareCleanOutputDirectory(options.outDir);
 
         // Attach the tee log file before any further info() so every line is
         // captured in run.log.
@@ -291,6 +319,8 @@ int runApplication(int argc, char** argv) {
         crashLogPath = options.outDir / "run.crash.log";
         runJsonPath = options.outDir / "run.json";
         timingJsonPath = options.outDir / "timing.json";
+        log.info("Output root: " + outputRoot.string());
+        log.info("Output directory: " + options.outDir.string());
 
         // -------------------- Env header --------------------
         // Captured once and emitted as [env] tagged lines so the log is

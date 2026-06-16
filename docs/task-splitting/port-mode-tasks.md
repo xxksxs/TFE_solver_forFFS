@@ -24,7 +24,7 @@
 ## 验证命令
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --out results_port_check --max-sweep-points 1 --write-all-fields
+.\build\Release\bp_fem_solver.exe --out result --max-sweep-points 1 --write-all-fields
 ```
 
 ## 风险提示

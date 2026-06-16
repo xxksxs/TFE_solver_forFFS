@@ -53,8 +53,8 @@ public:
 cmake --build build_mkl --config Release
 
 # 单频点 BP filter，BiCGSTAB 无预条件 vs Jacobi 预条件
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --linear-solver bicgstab --tolerance 1e-9 --max-iterations 2000 --no-write-all-fields --out results_step3_nopre
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --linear-solver bicgstab --precon jacobi --tolerance 1e-9 --max-iterations 2000 --no-write-all-fields --out results_step3_jacobi
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --linear-solver bicgstab --tolerance 1e-9 --max-iterations 2000 --no-write-all-fields --out result
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --linear-solver bicgstab --precon jacobi --tolerance 1e-9 --max-iterations 2000 --no-write-all-fields --out result
 ```
 
 预期：

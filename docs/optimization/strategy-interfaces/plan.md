@@ -54,7 +54,7 @@ include/bpfem/
 ├── sweep/                     新建 ── 扫频策略抽象层
 │   ├── ISweepStrategy.hpp     ── run(freqs, ctx) → vector<SParameterPoint>
 │   ├── DirectSweep.hpp        ── 现 Application 内 direct loop 抽出
-│   ├── AlpsSweep.hpp          ── 现 mor::AlpsSweep 移过来 + 实现 ISweepStrategy
+│   ├── AlpsSweep.hpp          ── sweep::AlpsSweep + ISweepStrategy
 │   └── AdaptiveSweep.hpp      ── 占位（频点自适应、AAA 插值 等留空）
 ├── factory/                   新建
 │   ├── BoundaryConditionFactory.hpp
@@ -226,7 +226,7 @@ CMakeLists.txt                                src/factory/SparseSolverFactory.cp
 
 **不改动**：
 - 现有 `MklPardisoSolver` / `BiCGStabSolver` 类签名保持，让 `PardisoBackend` 用组合而不是继承（避免动旧代码）
-- AlpsSweep 内部仍直接 new `MklPardisoSolver`（Step 4 才迁出）
+- AlpsSweep 离线阶段通过 `ISparseSolver` 注入求解器，不再内部直接 new `MklPardisoSolver`
 
 **验证**：
 ```powershell
@@ -311,7 +311,7 @@ include/bpfem/app/Application.hpp             Options 加 PreconditionerKind / g
 
 ### Step 4 — `ISweepStrategy` + DirectSweep + AlpsSweep 迁移
 
-**目标**：把 `Application::runApplication` 内 196–251 行的 direct loop 抽成 `DirectSweep`；`mor::AlpsSweep` 改名为 `sweep::AlpsSweep` 并实现 `ISweepStrategy`。
+**目标**：把 `Application::runApplication` 内 196–251 行的 direct loop 抽成 `DirectSweep`；`sweep::AlpsSweep` 实现 `ISweepStrategy`。
 
 **文件改动**：
 
@@ -330,7 +330,7 @@ src/app/Application.cpp                       Application 缩到 ~50 行：
                                                   - 工厂建 solver / sweep
                                                   - 调 sweep.run() → 写 CSV / VTU
 include/bpfem/mor/AlpsSweep.hpp               留薄壳别名，标 [[deprecated]]，下个 release 删
-CMakeLists.txt                                src/sweep/*.cpp 加入；src/mor/AlpsSweep.cpp 移除
+CMakeLists.txt                                src/sweep/*.cpp 加入；ALPS 位于 src/sweep/AlpsSweep.cpp
 ```
 
 **验证**：BP filter 5 频点 direct vs 101 频点 ALPS 同时跑，CSV 与 main 分支字节一致。

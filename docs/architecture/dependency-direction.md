@@ -33,7 +33,7 @@ bc
 sweep
  |-- core
  |-- fem             (AlpsSweep 直接调 assembler.buildAffineSystem)
- |-- linalg          (ISparseSolver + 内部 MklPardisoSolver for ALPS offline)
+ |-- linalg          (ISparseSolver；ALPS offline 通过接口注入求解器)
  |-- post            (DirectSweep 调 ResultExtractor)
 
 linalg

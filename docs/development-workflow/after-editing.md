@@ -7,7 +7,7 @@
 ```powershell
 cmake --build build --config Release
 .\build\Release\bp_fem_solver.exe --help
-.\build\Release\bp_fem_solver.exe --out results_check --max-sweep-points 1
+.\build\Release\bp_fem_solver.exe --out result --max-sweep-points 1
 ```
 
 ## 求解器或 CMake 修改

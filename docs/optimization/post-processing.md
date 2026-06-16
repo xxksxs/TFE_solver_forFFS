@@ -108,7 +108,7 @@ struct FarFieldPoint {
 ## 8. CLI / 配置升级
 
 ```
---write-touchstone results/device.s2p
+--write-touchstone result/device.s2p
 --reference-impedance "1=50,2=50"
 --deembed "1=2mm,2=2mm"
 --farfield "elev:-90:90:181;azim:0:360:361"

@@ -56,7 +56,10 @@ enum class PreconditionerKind {
 struct Options {
     std::filesystem::path aedt = "wg_bp_filter.aedt";
     std::filesystem::path mesh = "current.ngmesh";
-    std::filesystem::path outDir = "results";
+    // Output root. A run writes into a stable per-sweep subdirectory such as
+    // result/result_AWE or result/result_MGAWE; the selected subdirectory is
+    // cleaned before each run.
+    std::filesystem::path outDir = "result";
     int maxSweepPoints = 101;
     int maxIterations = 400;
     int basisOrder = 0;

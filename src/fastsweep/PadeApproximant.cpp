@@ -1,8 +1,9 @@
 #include "bpfem/fastsweep/PadeApproximant.hpp"
 
+#include "bpfem/fastsweep/LinearAlgebra.hpp"
+
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -15,55 +16,6 @@ using Complex = PadeApproximant::Complex;
 std::size_t idx(int row, int col, int n) {
     return static_cast<std::size_t>(row) * static_cast<std::size_t>(n)
         + static_cast<std::size_t>(col);
-}
-
-bool denseSolve(std::vector<Complex>& A, std::vector<Complex>& rhs, int n, double& pivotRatio) {
-    double minPivot = std::numeric_limits<double>::infinity();
-    double maxPivot = 0.0;
-
-    for (int k = 0; k < n; ++k) {
-        int pivotRow = k;
-        double pivotMag = std::abs(A[idx(k, k, n)]);
-        for (int r = k + 1; r < n; ++r) {
-            const double mag = std::abs(A[idx(r, k, n)]);
-            if (mag > pivotMag) {
-                pivotMag = mag;
-                pivotRow = r;
-            }
-        }
-        if (pivotMag < 1.0e-30) {
-            return false;
-        }
-        minPivot = std::min(minPivot, pivotMag);
-        maxPivot = std::max(maxPivot, pivotMag);
-        if (pivotRow != k) {
-            for (int c = 0; c < n; ++c) {
-                std::swap(A[idx(k, c, n)], A[idx(pivotRow, c, n)]);
-            }
-            std::swap(rhs[static_cast<std::size_t>(k)], rhs[static_cast<std::size_t>(pivotRow)]);
-        }
-
-        const Complex pivot = A[idx(k, k, n)];
-        for (int r = k + 1; r < n; ++r) {
-            const Complex factor = A[idx(r, k, n)] / pivot;
-            A[idx(r, k, n)] = factor;
-            for (int c = k + 1; c < n; ++c) {
-                A[idx(r, c, n)] -= factor * A[idx(k, c, n)];
-            }
-            rhs[static_cast<std::size_t>(r)] -= factor * rhs[static_cast<std::size_t>(k)];
-        }
-    }
-
-    for (int r = n - 1; r >= 0; --r) {
-        Complex sum = rhs[static_cast<std::size_t>(r)];
-        for (int c = r + 1; c < n; ++c) {
-            sum -= A[idx(r, c, n)] * rhs[static_cast<std::size_t>(c)];
-        }
-        rhs[static_cast<std::size_t>(r)] = sum / A[idx(r, r, n)];
-    }
-
-    pivotRatio = maxPivot / std::max(minPivot, 1.0e-300);
-    return true;
 }
 
 Complex horner(const std::vector<Complex>& coeffs, Complex t) {
@@ -106,7 +58,7 @@ PadeApproximant PadeApproximant::build(const std::vector<Complex>& moments,
         }
 
         double pivotRatio = 1.0;
-        if (!denseSolve(system, rhs, denominatorOrder, pivotRatio)) {
+        if (!denseSolve(system, rhs, denominatorOrder, &pivotRatio)) {
             throw std::runtime_error("PadeApproximant: singular moment system");
         }
         out.pivotRatio_ = pivotRatio;

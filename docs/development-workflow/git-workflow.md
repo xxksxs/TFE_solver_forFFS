@@ -7,14 +7,14 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `.gitignore` | 屏蔽 `build*/`、`results_*/`、IDE 元数据、LaTeX 中间文件、Python 缓存等 |
+| `.gitignore` | 屏蔽 `build*/`、`result/`、IDE 元数据、LaTeX 中间文件、Python 缓存等 |
 | `.gitattributes` | 跨平台行尾稳定化（仓库存 LF，工作副本恢复平台原生 EOL）；`*.aedt`、`*.ngmesh`、`*.pdf`、`*.png`、`*.vtu` 标记为 binary |
 | `CHANGELOG.md` | 用户可见变化的版本日志，每次里程碑发版同步打 tag |
 
 ## 提交粒度
 
 - **一次 commit 解决一件事**：例如"`PortMethod::Numerical` 接入"+对应文档+对应 CHANGELOG 条目算一次 commit；若同时要做无关的代码风格清理，分两次 commit。
-- **不混合 release artifact**：`results_*/`、`build*/`、`*.pdf` 中的临时构建输出不入库；只有作为参考的 LaTeX 编译 PDF（如 `docs/optimization/build_affine_system.pdf`）以及 HFSS reference CSV 等"对照基准"明确入库。
+- **不混合 release artifact**：`result/`、`build*/`、`*.pdf` 中的临时构建输出不入库；只有作为参考的 LaTeX 编译 PDF（如 `docs/optimization/build_affine_system.pdf`）以及 HFSS reference CSV 等"对照基准"明确入库。
 - **commit message**：第一行 ≤ 70 字，命令式语气；如果改动会影响 CLI 或数学行为，body 中列一两行影响面。中英文皆可，本工程默认中文。
 
 ## 标签 (tags)

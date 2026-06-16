@@ -27,8 +27,14 @@ add_library(bp_fem_core STATIC
     src/core/Utilities.cpp
     src/factory/SparseSolverFactory.cpp
     src/factory/SweepStrategyFactory.cpp
+    src/fastsweep/FastSweepDiagnostics.cpp
+    src/fastsweep/GalerkinReducedModel.cpp
+    src/fastsweep/LinearAlgebra.cpp
     src/fastsweep/PadeApproximant.cpp
     src/fastsweep/PolynomialMomentRecurrence.cpp
+    src/fastsweep/PolynomialPortMomentBuilder.cpp
+    src/fastsweep/PortModeUtilities.cpp
+    src/fastsweep/WellConditionedBasisBuilder.cpp
     src/fem/EdgeTopology.cpp
     src/fem/FEMAssembler.cpp
     src/fem/PortModeSolver.cpp
@@ -76,6 +82,11 @@ endif()
 add_executable(bp_fem_solver src/main.cpp)
 target_link_libraries(bp_fem_solver PRIVATE bp_fem_core)
 
+enable_testing()
+add_executable(fastsweep_tests tests/fastsweep_tests.cpp)
+target_link_libraries(fastsweep_tests PRIVATE bp_fem_core)
+add_test(NAME fastsweep_tests COMMAND fastsweep_tests)
+
 # Logger uses GetProcessMemoryInfo (Psapi) on Windows for the working-set /
 # peak-memory counters in the run summary. Link the import library that
 # provides those symbols. Modern Windows merges psapi into kernel32 at
@@ -87,7 +98,9 @@ endif()
 if(MSVC)
     target_compile_options(bp_fem_core PRIVATE /W4 /permissive- /EHsc)
     target_compile_options(bp_fem_solver PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(fastsweep_tests PRIVATE /W4 /permissive- /EHsc)
 else()
     target_compile_options(bp_fem_core PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(bp_fem_solver PRIVATE -Wall -Wextra -pedantic)
+    target_compile_options(fastsweep_tests PRIVATE -Wall -Wextra -pedantic)
 endif()

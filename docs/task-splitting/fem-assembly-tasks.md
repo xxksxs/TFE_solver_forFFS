@@ -21,7 +21,7 @@
 ## 验证命令
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --out results_fem_check --max-sweep-points 1
+.\build\Release\bp_fem_solver.exe --out result --max-sweep-points 1
 ```
 
 ## 风险提示

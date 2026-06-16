@@ -27,7 +27,7 @@ K_port v = k_c^2 M_port v
 
 | 目标 | 状态 |
 |---|---|
-| BP filter 例题与直接求解器 S 参数偏差 < 0.05 dB | 数值 TFE-N 与 HFSS TFE 参考曲线对比已生成（见 `results_compare/`） |
+| BP filter 例题与直接求解器 S 参数偏差 < 0.05 dB | 数值 TFE-N 与 HFSS TFE 参考曲线对比已生成（见 `result/result_COMPARE/`） |
 | `--port-method tfe --sweep alps` 通过 | ✓ |
 | 多模收敛：1/3/5/10 模 | ✓ |
 | 任意截面端口 | ✓（端口网格直接驱动） |
@@ -65,7 +65,7 @@ src/fem/FEMAssembler.cpp                                   # applyWavePorts/spar
                                                            # buildAffineSystem 展开为虚拟端口列表
 include/bpfem/fem/FEMAssembler.hpp                         # AffineSystem 加 projectPortIndex/isExcitationMode
 
-src/mor/AlpsSweep.cpp                                      # 改为虚拟端口索引
+src/sweep/AlpsSweep.cpp                                    # 改为虚拟端口索引
 include/bpfem/mor/AlpsSweep.hpp                            # 同上
 
 include/bpfem/app/Application.hpp                          # PortMethod 改为 Analytic|Transfinite
@@ -120,18 +120,18 @@ CMakeLists.txt                                             # 加 src/apm + src/t
 ```powershell
 python scripts\compare_with_hfss.py `
     "S Parameter Plot 1.csv" `
-    results_compare `
-    --solver "APM=results_apm\s_parameters.csv" `
-    --solver "TFE-1=results_tfe1\s_parameters.csv" `
-    --solver "TFE-5=results_tfe_numerical\s_parameters.csv"
+    result/result_COMPARE `
+    --solver "APM=result\result_DIRECT\s_parameters.csv" `
+    --solver "TFE-1=result\result_DIRECT\s_parameters.csv" `
+    --solver "TFE-5=result\result_DIRECT\s_parameters.csv"
 ```
 
 输出：
 
-- `results_compare/tfe_compare.png`     |S11|/|S21| dB 叠加
-- `results_compare/tfe_compare_residual.png`  线性 |S| 残差 (对深陷 null 不敏感)
-- `results_compare/tfe_compare.csv`     按频点的差值表
-- `results_compare/tfe_compare.txt`     各曲线的 max/mean/RMS|Δ| 与 3-dB 带宽 vs HFSS
+- `result/result_COMPARE/tfe_compare.png`     |S11|/|S21| dB 叠加
+- `result/result_COMPARE/tfe_compare_residual.png`  线性 |S| 残差 (对深陷 null 不敏感)
+- `result/result_COMPARE/tfe_compare.csv`     按频点的差值表
+- `result/result_COMPARE/tfe_compare.txt`     各曲线的 max/mean/RMS|Δ| 与 3-dB 带宽 vs HFSS
 
 ## 8. 待办
 

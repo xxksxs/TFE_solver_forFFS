@@ -95,15 +95,17 @@ DDM 实现拨入 Phase 3。
 AWE / GAWE / MGAWE / WCAWE 已接入 CLI：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out results_awe
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out results_gawe
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out results_mgawe
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out results_wcawe
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out result
 ```
 
 其中 GAWE 是单展开点 Galerkin AWE：先生成局部 AWE 矩向量，再正交化并投影为一个 ROM；MGAWE 使用多个展开点的局部 AWE/GAWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 使用单展开点传统 AWE 矩序列生成良条件正交基，并输出 `basis_condition.csv` 记录 AWE/WCAWE 条件曲线。下一步是多点 WCAWE 和自适应展开点。
 
 AWE / GAWE / MGAWE / WCAWE 的模块化算法 skill 与校验方法见 `awe-family/README.md`。这组文档把显式 Padé AWE、单点/多点 Galerkin AWE 和良条件 AWE 拆成可独立实现、可抽离的 fast-sweep 子模块。
+
+当前 fast-sweep 共享内核位于 `include/bpfem/fastsweep/` 与 `src/fastsweep/`：`PolynomialPortMomentBuilder` 统一端口矩递推，`GalerkinReducedModel` 统一 K/M/端口投影与在线 reduced solve，`WellConditionedBasisBuilder` 负责 WCAWE 正交基、上三角系数和 `X≈VR` 诊断。Direct、ALPS、AWE、GAWE、MGAWE、WCAWE 均输出 `diagnostics.json`；WCAWE 额外输出 `basis_condition.csv`。
 
 落地接口：
 

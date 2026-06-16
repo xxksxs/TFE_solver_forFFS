@@ -1,9 +1,10 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/fastsweep/GalerkinReducedModel.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
-#include "bpfem/linalg/SparseMatrix.hpp"
+#include "bpfem/linalg/ISparseSolver.hpp"
 #include "bpfem/sweep/ISweepStrategy.hpp"
 
 #include <complex>
@@ -42,6 +43,8 @@ struct AlpsOptions {
 
 class AlpsSweep : public ISweepStrategy {
 public:
+    using Complex = std::complex<double>;
+
     AlpsSweep(const ProjectDefinition& project,
               const FEMAssembler& assembler,
               const PortModeSolver& portModeSolver,
@@ -49,26 +52,28 @@ public:
 
     // ISweepStrategy entry point. Builds the offline ROM at the configured
     // expansion frequency (or band center if 0), then evaluates every
-    // requested frequency. SweepResult::lastEdgeDofs is left empty: ALPS
-    // does not retain a full-space basis in this MVP, which is why
-    // `--sweep alps` cannot write per-frequency VTU. ctx.onFieldSolved is
-    // ignored.
+    // requested frequency. ALPS keeps the reduced basis and reconstructs only
+    // the final field for field_last.vtu; per-frequency field callbacks remain
+    // ignored to avoid large disk output.
     SweepResult run(const std::vector<double>& frequencies,
                     const SweepContext& ctx) override;
 
     const char* name() const override { return "alps"; }
 
     // Exposed for unit tests and offline diagnostics.
-    int buildOffline(double expansionFrequencyHz);
+    int buildOffline(double expansionFrequencyHz,
+                     linalg::ISparseSolver& solver,
+                     const linalg::SolverConfig& solverConfig);
     SParameterPoint evaluate(double frequencyHz) const;
+    std::vector<Complex> reconstructField(double frequencyHz) const;
 
     int dimension() const { return romDim_; }
     double expansionFrequency() const { return expansionFrequencyHz_; }
     bool ready() const { return ready_; }
+    int retainedColumns() const { return retainedColumns_; }
+    int deflatedColumns() const { return deflatedColumns_; }
 
 private:
-    using Complex = std::complex<double>;
-
     const ProjectDefinition& project_;
     const FEMAssembler& assembler_;
     const PortModeSolver& portModeSolver_;
@@ -80,12 +85,11 @@ private:
     int fullDim_ = 0;
     int numProjectPorts_ = 0;
     int numVirtualPorts_ = 0;
+    int retainedColumns_ = 0;
+    int deflatedColumns_ = 0;
 
     FEMAssembler::AffineSystem affine_;
-
-    std::vector<Complex> Ktilde_;
-    std::vector<Complex> Mtilde_;
-    std::vector<std::vector<Complex>> portModeReduced_;
+    fastsweep::GalerkinReducedModel model_;
 };
 
 }  // namespace fem::sweep

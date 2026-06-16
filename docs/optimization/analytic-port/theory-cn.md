@@ -172,4 +172,4 @@ S11 在 deep nulls（如 40.75 GHz S11 ≈ -44 dB）上 TFE 与 NPM 偏差可达
 
 ## 11. 与 ALPS 的关系
 
-ALPS 模块（`fem::mor::AlpsSweep`）依赖 `FEMAssembler::buildAffineSystem` 给出 `(K, M, m_p, k_c²)`。TFE 替换的是 `m_p` 和 `k_c²` 的来源，**不影响** ALPS 的下游逻辑。`--port-method tfe --sweep alps` 同时启用是合法组合。
+ALPS 模块（`fem::sweep::AlpsSweep`）依赖 `FEMAssembler::buildAffineSystem` 给出 `(K, M, m_p, k_c²)`。TFE 替换的是 `m_p` 和 `k_c²` 的来源，**不影响** ALPS 的下游逻辑。`--port-method tfe --sweep alps` 同时启用是合法组合。

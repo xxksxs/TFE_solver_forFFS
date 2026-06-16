@@ -1,5 +1,7 @@
 #include "bpfem/sweep/GaweSweep.hpp"
 
+#include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
+
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -67,13 +69,29 @@ SweepResult GaweSweep::run(const std::vector<double>& frequencies, const SweepCo
         }
         out.points.push_back(evaluate(f));
         out.lastFrequencyHz = f;
-        if (ctx.onFieldSolved) {
-            ctx.onFieldSolved(f, reconstructField(f));
-        }
     }
     if (!frequencies.empty()) {
         out.lastEdgeDofs = reconstructField(frequencies.back());
     }
+    if (!ctx.outputDirectory.empty()) {
+        fastsweep::FastSweepDiagnostics diag;
+        diag.algorithm = name();
+        diag.expansionFrequenciesHz = {expansionHz};
+        diag.requestedOrder = options_.order;
+        diag.romDimension = dimension();
+        diag.retainedColumns = retainedColumns();
+        diag.deflatedColumns = deflatedColumns();
+        diag.basisOrthogonalityError = delegate_.basisOrthogonalityError();
+        diag.reducedSolveSucceeded = delegate_.reducedSolveSucceeded();
+        diag.maxPassivityError = fastsweep::maxPassivityError(out.points);
+        const auto path = ctx.outputDirectory / "diagnostics.json";
+        if (fastsweep::writeDiagnosticsJson(path, diag)) {
+            ctx.log.info("Wrote " + path.string());
+        } else {
+            ctx.log.warn("Failed to write " + path.string());
+        }
+    }
+    (void)ctx.onFieldSolved;
     return out;
 }
 

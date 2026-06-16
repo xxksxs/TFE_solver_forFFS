@@ -1,6 +1,8 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/fastsweep/GalerkinReducedModel.hpp"
+#include "bpfem/fastsweep/WellConditionedBasisBuilder.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
@@ -52,24 +54,13 @@ public:
     bool writeBasisConditionCsv(const std::filesystem::path& path) const;
 
 private:
-    struct ConditionRecord {
-        int order = 0;
-        double aweConditionProxy = 0.0;
-        double wcaweConditionProxy = 1.0;
-        double rDiagonalAbs = 0.0;
-        double orthogonalityError = 0.0;
-    };
-
     std::vector<std::vector<Complex>> buildAweMoments(
         double expansionFrequencyHz,
         linalg::ISparseSolver& solver,
         const linalg::SolverConfig& solverConfig,
         const std::vector<std::vector<Complex>>& portVectors) const;
 
-    bool appendWellConditionedColumn(const std::vector<Complex>& moment);
-    void projectReducedModel(const std::vector<std::vector<Complex>>& portVectors);
     std::vector<Complex> solveReduced(double frequencyHz) const;
-    const PortMode& virtualPortMode(int virtualPortIndex) const;
 
     const ProjectDefinition& project_;
     const FEMAssembler& assembler_;
@@ -85,13 +76,8 @@ private:
     double expansionFrequencyHz_ = 0.0;
 
     FEMAssembler::AffineSystem affine_;
-    std::vector<std::vector<Complex>> basis_;
-    std::vector<Complex> triangularR_;
-    std::vector<double> rDiagonalAbs_;
-    std::vector<ConditionRecord> conditionRecords_;
-    std::vector<Complex> Ktilde_;
-    std::vector<Complex> Mtilde_;
-    std::vector<std::vector<Complex>> portModeReduced_;
+    fastsweep::WellConditionedBasisBuilder basisBuilder_;
+    fastsweep::GalerkinReducedModel model_;
 };
 
 }  // namespace fem::sweep

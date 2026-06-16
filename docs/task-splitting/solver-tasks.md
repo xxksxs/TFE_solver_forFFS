@@ -22,7 +22,7 @@
 
 ```powershell
 cmake --build build --config Release
-.\build\Release\bp_fem_solver.exe --out results_solver_check --max-sweep-points 1
+.\build\Release\bp_fem_solver.exe --out result --max-sweep-points 1
 ```
 
 涉及 fallback 或 CMake 时，还应运行：
