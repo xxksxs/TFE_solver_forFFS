@@ -16,6 +16,7 @@ namespace fem::fastsweep {
 
 namespace {
 
+// 计算广义二项式系数，用于 sqrt(beta) 等非整数幂的局部展开。
 double binomialCoefficient(double alpha, int order) {
     double out = 1.0;
     for (int j = 1; j <= order; ++j) {
@@ -24,6 +25,7 @@ double binomialCoefficient(double alpha, int order) {
     return out;
 }
 
+// 生成 (base + delta)^alpha 关于 delta 的 Taylor 系数。
 std::vector<double> shiftedPowerSeries(double base, double alpha, int count) {
     if (base <= 0.0) {
         throw std::runtime_error("PolynomialPortMomentBuilder: expansion series base must be positive");
@@ -37,6 +39,7 @@ std::vector<double> shiftedPowerSeries(double base, double alpha, int count) {
     return coeffs;
 }
 
+// 对两个截断级数做卷积，保留前 count 阶系数。
 std::vector<double> convolve(const std::vector<double>& a,
                              const std::vector<double>& b,
                              int count) {
@@ -51,6 +54,7 @@ std::vector<double> convolve(const std::vector<double>& a,
     return out;
 }
 
+// 计算小整数幂，避免在矩递推内反复调用通用 pow。
 double powInt(double x, int n) {
     double out = 1.0;
     for (int i = 0; i < n; ++i) {
@@ -61,6 +65,7 @@ double powInt(double x, int n) {
 
 }  // namespace
 
+// 将 AffineSystem 中的端口耦合稀疏向量统一提升为全阶复向量。
 std::vector<std::vector<PolynomialPortMomentBuilder::Complex>>
 PolynomialPortMomentBuilder::buildPortVectors(const FEMAssembler::AffineSystem& affine,
                                               std::size_t fullDimension) {
@@ -72,6 +77,7 @@ PolynomialPortMomentBuilder::buildPortVectors(const FEMAssembler::AffineSystem& 
     return portVectors;
 }
 
+// 在无损材料假设下生成端口边界条件随频率变化的一组 AWE 矩向量。
 std::vector<std::vector<PolynomialPortMomentBuilder::Complex>>
 PolynomialPortMomentBuilder::generateLosslessMoments(
     const ProjectDefinition& project,

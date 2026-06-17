@@ -9,6 +9,7 @@ namespace fem::fastsweep {
 
 namespace {
 
+// 写出 JSON 字符串，并处理引号、反斜杠和换行转义。
 void writeJsonString(std::ostream& out, const std::string& s) {
     out << '"';
     for (char ch : s) {
@@ -25,6 +26,7 @@ void writeJsonString(std::ostream& out, const std::string& s) {
 
 }  // namespace
 
+// 计算 lossless 二端口中 |S11|^2+|S21|^2 偏离 1 的最大值。
 double maxPassivityError(const std::vector<SParameterPoint>& points) {
     double maxErr = 0.0;
     for (const auto& p : points) {
@@ -35,6 +37,7 @@ double maxPassivityError(const std::vector<SParameterPoint>& points) {
     return maxErr;
 }
 
+// 将 fast-sweep 统一诊断信息写成 diagnostics.json。
 bool writeDiagnosticsJson(const std::filesystem::path& path,
                           const FastSweepDiagnostics& d) {
     std::ofstream out(path, std::ios::out | std::ios::trunc);

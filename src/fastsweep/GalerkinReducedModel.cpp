@@ -11,6 +11,7 @@
 
 namespace fem::fastsweep {
 
+// 用给定正交基构造 Galerkin ROM：投影 K/M 矩阵并预投影端口向量。
 void GalerkinReducedModel::build(
     const ProjectDefinition& project,
     const FEMAssembler::AffineSystem& affine,
@@ -65,6 +66,7 @@ void GalerkinReducedModel::build(
     ready_ = true;
 }
 
+// 在 ROM 空间组装指定频率的小型端口边界系统，并求解 reduced 坐标。
 std::vector<GalerkinReducedModel::Complex>
 GalerkinReducedModel::solveReduced(double frequencyHz) const {
     if (!ready_ || project_ == nullptr || affine_ == nullptr || portModeSolver_ == nullptr) {
@@ -140,6 +142,7 @@ GalerkinReducedModel::solveReduced(double frequencyHz) const {
     return xTilde;
 }
 
+// 在指定频率求解 ROM 后，从主导输入/输出端口投影中提取 S11 和 S21。
 SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz) const {
     SParameterPoint sp;
     sp.frequencyHz = frequencyHz;
@@ -194,6 +197,7 @@ SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz) const {
     return sp;
 }
 
+// 将 reduced 坐标按基向量线性组合回全阶场，用于 VTU 场文件输出。
 std::vector<GalerkinReducedModel::Complex>
 GalerkinReducedModel::reconstructField(double frequencyHz) const {
     const auto xTilde = solveReduced(frequencyHz);
@@ -208,6 +212,7 @@ GalerkinReducedModel::reconstructField(double frequencyHz) const {
     return field;
 }
 
+// 返回当前 ROM 基的最大正交性误差。
 double GalerkinReducedModel::basisOrthogonalityError() const {
     return orthogonalityError(basis_);
 }

@@ -13,11 +13,13 @@ namespace {
 
 using Complex = PadeApproximant::Complex;
 
+// 将 Padé 小系统的二维索引映射到一维行主序数组。
 std::size_t idx(int row, int col, int n) {
     return static_cast<std::size_t>(row) * static_cast<std::size_t>(n)
         + static_cast<std::size_t>(col);
 }
 
+// 用 Horner 形式稳定评估多项式系数序列。
 Complex horner(const std::vector<Complex>& coeffs, Complex t) {
     Complex out(0.0, 0.0);
     for (auto it = coeffs.rbegin(); it != coeffs.rend(); ++it) {
@@ -28,6 +30,7 @@ Complex horner(const std::vector<Complex>& coeffs, Complex t) {
 
 }  // namespace
 
+// 由 Taylor 矩构造指定 [L/M] Padé 近似，并记录分母线性系统的主元比。
 PadeApproximant PadeApproximant::build(const std::vector<Complex>& moments,
                                        int numeratorOrder,
                                        int denominatorOrder) {
@@ -80,6 +83,7 @@ PadeApproximant PadeApproximant::build(const std::vector<Complex>& moments,
     return out;
 }
 
+// 在高阶 Padé 小系统奇异时逐步降低分母阶数，构造一个可用的近似。
 PadeApproximant PadeApproximant::buildBestEffort(const std::vector<Complex>& moments,
                                                  int requestedNumeratorOrder,
                                                  int requestedDenominatorOrder) {
@@ -100,6 +104,7 @@ PadeApproximant PadeApproximant::buildBestEffort(const std::vector<Complex>& mom
     throw std::runtime_error("PadeApproximant: no stable Padé order could be built");
 }
 
+// 在给定局部变量 t 上评估 Padé 有理函数。
 PadeApproximant::Complex PadeApproximant::evaluate(Complex t) const {
     const Complex den = horner(denominator_, t);
     if (std::abs(den) < 1.0e-30) {

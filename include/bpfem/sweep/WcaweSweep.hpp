@@ -31,35 +31,51 @@ class WcaweSweep : public ISweepStrategy {
 public:
     using Complex = std::complex<double>;
 
+    // 绑定工程、装配器、端口模式求解器和 WCAWE 配置。
     WcaweSweep(const ProjectDefinition& project,
                const FEMAssembler& assembler,
                const PortModeSolver& portModeSolver,
                WcaweOptions options = {});
 
+    // 执行完整 WCAWE 扫频流程，并返回所有频点的 S 参数。
     SweepResult run(const std::vector<double>& frequencies,
                     const SweepContext& ctx) override;
 
+    // 返回命令行和诊断文件使用的算法名。
     const char* name() const override { return "wcawe"; }
 
+    // 离线阶段：生成良条件基并构建 Galerkin ROM。
     int buildOffline(double expansionFrequencyHz,
                      linalg::ISparseSolver& solver,
                      const linalg::SolverConfig& solverConfig);
+
+    // 在线阶段：评估指定频率的 S 参数。
     SParameterPoint evaluate(double frequencyHz) const;
+
+    // 在线阶段：重构指定频率的全阶场。
     std::vector<Complex> reconstructField(double frequencyHz) const;
 
+    // 返回当前 ROM 维度。
     int dimension() const { return romDim_; }
+
+    // 返回离线正交化中丢弃的候选列数。
     int deflatedColumns() const { return deflatedColumns_; }
+
+    // 返回 WCAWE 离线阶段是否已经完成。
     bool ready() const { return ready_; }
 
+    // 写出 WCAWE 条件数诊断 CSV。
     bool writeBasisConditionCsv(const std::filesystem::path& path) const;
 
 private:
+    // 生成传统 AWE 矩向量，随后由 WellConditionedBasisBuilder 变换为良条件基。
     std::vector<std::vector<Complex>> buildAweMoments(
         double expansionFrequencyHz,
         linalg::ISparseSolver& solver,
         const linalg::SolverConfig& solverConfig,
         const std::vector<std::vector<Complex>>& portVectors) const;
 
+    // 求解指定频率的 reduced 坐标。
     std::vector<Complex> solveReduced(double frequencyHz) const;
 
     const ProjectDefinition& project_;

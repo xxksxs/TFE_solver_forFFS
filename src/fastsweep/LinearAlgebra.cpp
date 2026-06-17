@@ -9,6 +9,7 @@ namespace fem::fastsweep {
 
 namespace {
 
+// 将二维行列索引映射到一维行主序数组位置。
 std::size_t idx(int row, int col, int n) {
     return static_cast<std::size_t>(row) * static_cast<std::size_t>(n)
         + static_cast<std::size_t>(col);
@@ -16,6 +17,7 @@ std::size_t idx(int row, int col, int n) {
 
 }  // namespace
 
+// 把稀疏实数端口向量提升为全阶复数向量，便于后续复数矩阵运算。
 std::vector<Complex> liftRealSparseVector(const std::vector<std::pair<int, double>>& sparse,
                                           std::size_t n) {
     std::vector<Complex> out(n, Complex(0.0, 0.0));
@@ -27,6 +29,7 @@ std::vector<Complex> liftRealSparseVector(const std::vector<std::pair<int, doubl
     return out;
 }
 
+// 计算不取共轭的双线性内积，匹配复对称 FEM/Galerkin 投影约定。
 Complex bilinear(const std::vector<Complex>& a, const std::vector<Complex>& b) {
     Complex s(0.0, 0.0);
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -35,6 +38,7 @@ Complex bilinear(const std::vector<Complex>& a, const std::vector<Complex>& b) {
     return s;
 }
 
+// 计算标准 Hermitian 内积，用于正交化、范数和稳定性诊断。
 Complex hdot(const std::vector<Complex>& a, const std::vector<Complex>& b) {
     Complex s(0.0, 0.0);
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -43,6 +47,7 @@ Complex hdot(const std::vector<Complex>& a, const std::vector<Complex>& b) {
     return s;
 }
 
+// 返回复向量的二范数。
 double norm2(const std::vector<Complex>& a) {
     double s = 0.0;
     for (const auto& z : a) {
@@ -51,6 +56,7 @@ double norm2(const std::vector<Complex>& a) {
     return std::sqrt(s);
 }
 
+// 对候选向量执行改进 Gram-Schmidt 正交化，并返回剩余向量范数。
 double modifiedGramSchmidt(std::vector<Complex>& w,
                            const std::vector<std::vector<Complex>>& basis,
                            int reorthogonalizationPasses) {
@@ -66,6 +72,7 @@ double modifiedGramSchmidt(std::vector<Complex>& w,
     return norm2(w);
 }
 
+// 计算基向量集合相对单位正交关系的最大偏差。
 double orthogonalityError(const std::vector<std::vector<Complex>>& basis) {
     double err = 0.0;
     for (std::size_t i = 0; i < basis.size(); ++i) {
@@ -77,6 +84,7 @@ double orthogonalityError(const std::vector<std::vector<Complex>>& basis) {
     return err;
 }
 
+// 用带部分主元的稠密 LU 解小型复线性系统，供 ROM 和 Padé 小系统使用。
 bool denseSolve(std::vector<Complex>& a,
                 std::vector<Complex>& rhs,
                 int n,

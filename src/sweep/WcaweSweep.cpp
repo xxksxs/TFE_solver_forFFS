@@ -15,6 +15,7 @@
 
 namespace fem::sweep {
 
+// 构造 WCAWE 扫频器，并把阶数和丢弃阈值规整到可用范围。
 WcaweSweep::WcaweSweep(const ProjectDefinition& project,
                        const FEMAssembler& assembler,
                        const PortModeSolver& portModeSolver,
@@ -27,9 +28,10 @@ WcaweSweep::WcaweSweep(const ProjectDefinition& project,
     options_.order = std::max(1, options_.order);
     if (options_.dropTolerance <= 0.0) {
         options_.dropTolerance = 1.0e-12;
-    }
+      }
 }
 
+// 执行完整 WCAWE 扫频：离线生成良条件基，在线逐频点评估 S 参数，并写出诊断文件。
 SweepResult WcaweSweep::run(const std::vector<double>& frequencies, const SweepContext& ctx) {
     const double expansionHz = options_.expansionFrequencyHz > 0.0
         ? options_.expansionFrequencyHz
@@ -98,6 +100,7 @@ SweepResult WcaweSweep::run(const std::vector<double>& frequencies, const SweepC
     return out;
 }
 
+// 在展开频点处生成 AWE 矩向量，经过 WCAWE 正交化后构造统一 Galerkin ROM。
 int WcaweSweep::buildOffline(double expansionFrequencyHz,
                              linalg::ISparseSolver& solver,
                              const linalg::SolverConfig& solverConfig) {
@@ -137,6 +140,7 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     return romDim_;
 }
 
+// 调用公共矩递推模块，生成传统 AWE 矩向量，供 WCAWE 基构造器重新组合。
 std::vector<std::vector<WcaweSweep::Complex>> WcaweSweep::buildAweMoments(
     double expansionFrequencyHz,
     linalg::ISparseSolver& solver,
@@ -147,18 +151,22 @@ std::vector<std::vector<WcaweSweep::Complex>> WcaweSweep::buildAweMoments(
         std::max(1, options_.order), solver, solverConfig, portVectors);
 }
 
+// 在降阶空间内求解指定频率的小型 ROM 线性系统。
 std::vector<WcaweSweep::Complex> WcaweSweep::solveReduced(double frequencyHz) const {
     return model_.solveReduced(frequencyHz);
 }
 
+// 由 ROM 解提取指定频率的二端口 S 参数。
 SParameterPoint WcaweSweep::evaluate(double frequencyHz) const {
     return model_.evaluate(frequencyHz);
 }
 
+// 将指定频率的 ROM 解提升回全阶边自由度，用于最后一个频点的场输出。
 std::vector<WcaweSweep::Complex> WcaweSweep::reconstructField(double frequencyHz) const {
     return model_.reconstructField(frequencyHz);
 }
 
+// 写出 WCAWE 条件数诊断表，记录传统矩基与正交基的稳定性差异。
 bool WcaweSweep::writeBasisConditionCsv(const std::filesystem::path& path) const {
     std::ofstream out(path, std::ios::out | std::ios::trunc);
     if (!out.good()) {

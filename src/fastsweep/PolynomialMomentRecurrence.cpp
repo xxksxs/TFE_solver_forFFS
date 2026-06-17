@@ -5,6 +5,7 @@
 
 namespace fem::fastsweep {
 
+// 对一般多项式矩阵方程执行矩递推：每一阶矩都通过展开点矩阵求解得到。
 std::vector<std::vector<PolynomialMomentRecurrence::Complex>>
 PolynomialMomentRecurrence::generatePolynomialMoments(
     const std::vector<std::vector<Complex>>& rhsCoefficients,
@@ -47,6 +48,7 @@ PolynomialMomentRecurrence::generatePolynomialMoments(
     return moments;
 }
 
+// 针对 A(lambda)=A0-(lambda-lambda0)M 的一阶质量矩阵模型生成局部矩。
 std::vector<std::vector<PolynomialMomentRecurrence::Complex>>
 PolynomialMomentRecurrence::generateFirstOrderMassMoments(
     const SparseMatrix& massMatrix,

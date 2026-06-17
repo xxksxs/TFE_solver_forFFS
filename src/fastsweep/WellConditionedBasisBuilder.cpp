@@ -6,9 +6,11 @@
 
 namespace fem::fastsweep {
 
+// 创建 WCAWE 基构造器，并设置 MGS 后残差/对角元的丢弃阈值。
 WellConditionedBasisBuilder::WellConditionedBasisBuilder(double dropTolerance)
     : dropTolerance_(dropTolerance > 0.0 ? dropTolerance : 1.0e-12) {}
 
+// 清空已有基、上三角系数和条件数诊断记录，以便开始新的离线阶段。
 void WellConditionedBasisBuilder::clear() {
     deflatedColumns_ = 0;
     maxMomentReconstructionError_ = 0.0;
@@ -18,6 +20,7 @@ void WellConditionedBasisBuilder::clear() {
     records_.clear();
 }
 
+// 向 WCAWE 基中加入一个传统 AWE 矩向量；若方向近线性相关则执行 deflation。
 bool WellConditionedBasisBuilder::append(const std::vector<Complex>& moment) {
     std::vector<Complex> w = moment;
     const double pre = norm2(w);

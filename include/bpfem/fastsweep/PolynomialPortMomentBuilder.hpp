@@ -14,10 +14,12 @@ class PolynomialPortMomentBuilder {
 public:
     using Complex = std::complex<double>;
 
+    // 将 AffineSystem 中的端口耦合向量提升为全阶复向量列表。
     static std::vector<std::vector<Complex>> buildPortVectors(
         const FEMAssembler::AffineSystem& affine,
         std::size_t fullDimension);
 
+    // 生成无损端口边界问题的 AWE 矩向量，供 AWE/GAWE/MGAWE/WCAWE 共用。
     static std::vector<std::vector<Complex>> generateLosslessMoments(
         const ProjectDefinition& project,
         const FEMAssembler& assembler,

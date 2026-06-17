@@ -23,8 +23,10 @@ struct FastSweepDiagnostics {
     double maxPassivityError = 0.0;
 };
 
+// 计算一组 S 参数点的最大无源性偏差。
 double maxPassivityError(const std::vector<SParameterPoint>& points);
 
+// 将 fast-sweep 诊断结构写成 JSON 文件。
 bool writeDiagnosticsJson(const std::filesystem::path& path,
                           const FastSweepDiagnostics& diagnostics);
 

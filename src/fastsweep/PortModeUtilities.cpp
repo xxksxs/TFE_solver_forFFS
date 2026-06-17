@@ -4,6 +4,7 @@
 
 namespace fem::fastsweep {
 
+// 根据虚拟端口索引返回对应端口模式；多模端口按同一 face 的出现顺序定位模式。
 const PortMode& virtualPortMode(const PortModeSolver& portModeSolver,
                                 const FEMAssembler::AffineSystem& affine,
                                 int virtualPortIndex) {
@@ -20,6 +21,7 @@ const PortMode& virtualPortMode(const PortModeSolver& portModeSolver,
     return portModeSolver.solve(faceId);
 }
 
+// 为每个工程端口找出用于 S 参数提取的主导虚拟端口。
 std::vector<int> dominantVirtualPortsByProject(const PortModeSolver& portModeSolver,
                                                const FEMAssembler::AffineSystem& affine,
                                                int projectPortCount) {
