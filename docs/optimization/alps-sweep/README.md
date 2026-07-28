@@ -1,29 +1,32 @@
-# ALPS 快速扫频专题目录
+# ALPS 快速扫频专题
 
-本目录维护"自适应 Lanczos-Padé 快速扫频 (ALPS, Adaptive Lanczos-Padé Sweep)"的理论资料。ALPS 是计算电磁学（CEM）领域历史最悠久的 FEM 频域快速扫频方法之一，由 Zhao 与 Lee 等人在 1999 ~ 2002 年提出，至今仍是商业级求解器（HFSS、CST、FEKO）"频率插值扫频/快速扫频"功能的主要数学骨架之一。
+本目录维护 Adaptive Lanczos-Padé Sweep（ALPS）的理论、实现约定和验证方法。
 
-## 文档列表
+## 当前实现
 
-- **`theory-cn.tex`** / **`theory-cn.pdf`**：基于 LaTeX 的中文理论文档。使用 `ctexart` + `xelatex theory-cn.tex` 编译。包含：原理概述、状态空间形式化、非对称 Lanczos 过程、Padé via Lanczos 定理、单点/多点自适应算法、对 Maxwell-FEM 的具体落地、误差指示器、与 Krylov MOR 的关系、收敛性与稳定性。
-- **`plan.md`**：开发计划与 MVP 落地记录（CLI、模块布局、性能、不变量、待办）。
-- **`README.md`**：当前文件。
+`--sweep alps` 使用中心单展开点的标准非对称双边 Lanczos-Padé：
 
-## MVP 状态
+- `PolynomialPortMomentBuilder` 构造 P1 系统 `A(t)=A0+t*A1`、`b(t)=b0+t*b1`。
+- 增广状态保留端口激励的一阶导数，不把 `b1` 当成常量丢弃。
+- 固定符号约定 `G=-L0^{-1}L1`、`W^T V=I`、`T=W^T G V`，在线系统为 `(I-tT)y=W^T r0`。
+- `LanczosPadeModel` 按 `alpha/beta/gamma` 标准三项递推直接生成三对角 `T`；仅在正交性越界时选择性再双正交化。
+- 普通耦合击穿但残差未耗尽时尝试一次最小 2x2 look-ahead；失败会终止并写入诊断。
+- oneMKL 构建对 `T` 调用 `LAPACKE_zgeev`，在线默认按极点-留数求和；非 MKL 构建及异常情况回退到三对角 Thomas 求解。
+- PARDISO 每个展开点只分解一次，Lanczos 非末步将 `Gv` 与 `G^T w` 两个 RHS 合并到一次 `phase=33`。
+- S11 和 S21 顺序构造；只有 S11 保留场重构所需右基，S21 只保留降阶数据。
 
-第一迭代已合入主干（2026R1 时刻）。CLI 入口：
+## 运行
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --sweep alps --alps-krylov-order 30
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 0 --max-sweep-points 101 --sweep alps --alps-order 12 --linear-solver direct --no-write-all-fields --out result
 ```
 
-在 BP filter 基准上 101 频点扫频从 ~22 min 降到 ~104 s（加速 ~12×），与 `--sweep direct` 在所有频点的 S 参数偏差 < 1e-10。详细说明见 `plan.md`。
+`--alps-order q` 直接表示每个标量 `[q-1/q]` Padé 模型的阶数。`--alps-krylov-order q` 是弃用别名，也直接映射到同一个 `q`；两个参数不能同时指定。省略 `--alps-expansion` 时使用频带中心。
 
-## 与现有文档的关系
+## 诊断
 
-- 顶层入口：`../../optimization-roadmap.md`，`../solvers-and-sweeps.md` 中已经登记 *AWE / Krylov MOR* 等快速扫频候选；ALPS 现在作为补充候选与之并列。
-- 平行专题：`../krylov-mor-sweep/` 为 Krylov MOR 的理论与开发计划。两者的数学关系见本目录 `theory-cn.tex` §10。
-- 不变量：`../../primitives/invariants.md`，`../../architecture/risk-points.md`。
+`diagnostics.json` 记录矩匹配、双正交误差、三项递推残差、look-ahead、选择性再正交、极点-留数重构误差和疑似伪极点。`timing.json` / `run.json` 区分 RHS 向量数、`phase=33` 调用数和最大批大小，并拆分端口线性化、Lanczos 算子、正交化、极点分解和在线评估时间。
 
-## 评审与放行
+## 边界
 
-MVP（单展开点 + 复对称 Galerkin + lossless 限定）已合入主干。后续多展开点、自适应、有损材料、极点-留数解析、ROM 序列化等改动应通过 PR review 后扩展，并在 `plan.md` §5 待办表中标注完成状态。
+当前只支持无损材料、P1 端口线性化、单展开点和两个独立 SISO 模型。本轮不包含 SyMPVL、block Lanczos、P2、有损材料和自动残差驱动多展开点。极点只做诊断标记，不会被静默删除。

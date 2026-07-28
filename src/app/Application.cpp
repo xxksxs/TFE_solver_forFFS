@@ -12,6 +12,8 @@
 #include "bpfem/fem/PortModeSolver.hpp"
 #include "bpfem/io/AEDTParser.hpp"
 #include "bpfem/io/NGMeshParser.hpp"
+#include "bpfem/io/PortFaceResolver.hpp"
+#include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
 #include "bpfem/post/OutputWriter.hpp"
 #include "bpfem/post/ResultExtractor.hpp"
@@ -94,6 +96,8 @@ void prepareCleanOutputDirectory(const std::filesystem::path& path) {
 // the --help text emitted at the end of the parser.
 Options parseOptions(int argc, char** argv) {
     Options options;
+    bool alpsOrderSpecified = false;
+    bool alpsLegacyOrderSpecified = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto requireValue = [&](const std::string& name) -> std::string {
@@ -145,9 +149,24 @@ Options parseOptions(int argc, char** argv) {
             } else {
                 throw std::runtime_error("--sweep must be 'direct', 'alps', 'awe', 'gawe', 'mgawe', or 'wcawe'");
             }
+        } else if (arg == "--alps-order") {
+            if (alpsLegacyOrderSpecified) {
+                throw std::runtime_error(
+                    "--alps-order and --alps-krylov-order cannot be specified together");
+            }
+            options.alpsOrder = std::stoi(requireValue(arg));
+            alpsOrderSpecified = true;
+            if (options.alpsOrder < 1) {
+                throw std::runtime_error("--alps-order must be >= 1");
+            }
         } else if (arg == "--alps-krylov-order") {
-            options.alpsKrylovOrder = std::stoi(requireValue(arg));
-            if (options.alpsKrylovOrder < 1) {
+            if (alpsOrderSpecified) {
+                throw std::runtime_error(
+                    "--alps-order and --alps-krylov-order cannot be specified together");
+            }
+            options.alpsOrder = std::stoi(requireValue(arg));
+            alpsLegacyOrderSpecified = true;
+            if (options.alpsOrder < 1) {
                 throw std::runtime_error("--alps-krylov-order must be >= 1");
             }
         } else if (arg == "--alps-expansion") {
@@ -261,7 +280,7 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--basis-order 0|1] [--field-output-order 1|2|3]\n"
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
                       << "                     [--sweep direct|alps|awe|gawe|mgawe|wcawe]\n"
-                      << "                     [--alps-krylov-order 30] [--alps-expansion <Hz>]\n"
+                      << "                     [--alps-order 12] [--alps-krylov-order <deprecated-alias>] [--alps-expansion <Hz>]\n"
                       << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"
                       << "                     [--gawe-order 12] [--gawe-expansion <Hz>] [--gawe-drop-tolerance 1e-10]\n"
                       << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"
@@ -333,7 +352,7 @@ int runApplication(int argc, char** argv) {
         // -------------------- Project import --------------------
         log.phase("Project import");
         log.info("Reading AEDT project: " + options.aedt.string());
-        const ProjectDefinition project = AEDTParser{}.parse(options.aedt);
+        ProjectDefinition project = AEDTParser{}.parse(options.aedt);
         log.info("Materials: " + std::to_string(project.materials.size()));
         log.info("Wave ports: " + std::to_string(project.ports.size()));
         log.info("Sweep: " + std::to_string(project.sweep.startHz / 1.0e9) + " GHz to " + std::to_string(project.sweep.endHz / 1.0e9) + " GHz, " + std::to_string(project.sweep.count) + " points");
@@ -343,6 +362,14 @@ int runApplication(int argc, char** argv) {
         log.info("Mesh points: " + std::to_string(mesh.pointsById.size()));
         log.info("Surface triangles: " + std::to_string(mesh.surfaceTriangles.size()));
         log.info("Tetrahedra: " + std::to_string(mesh.tetrahedra.size()));
+        PortFaceResolver::resolve(project, mesh);
+        for (const auto& port : project.ports) {
+            const std::string source = port.objectId >= 0
+                ? "sheet object " + std::to_string(port.objectId)
+                : "direct face";
+            log.info("Wave port " + std::to_string(port.id)
+                     + ": " + source + " -> mesh face " + std::to_string(port.faceId));
+        }
 
         // -------------------- Frequency-domain solve setup --------------------
         log.phase("Frequency-domain solve");
@@ -496,6 +523,38 @@ int runApplication(int argc, char** argv) {
         };
 
         sweep::SweepResult swept = sweepStrategy->run(frequencies, sweepCtx);
+        report.offlineBuildSec = swept.offlineBuildSec;
+        report.portLinearizationSec = swept.portLinearizationSec;
+        report.lanczosOperatorSec = swept.lanczosOperatorSec;
+        report.poleDecompositionSec = swept.poleDecompositionSec;
+        report.orthogonalizationSec = swept.orthogonalizationSec;
+        report.romProjectionSec = swept.romProjectionSec;
+        report.onlineSweepSec = swept.onlineSweepSec;
+
+        if (auto* reusable = dynamic_cast<linalg::IFactorizedSparseSolver*>(sparseSolver.get())) {
+            const auto stats = reusable->factorizationStatistics();
+            report.symbolicAnalysisCount = stats.symbolicAnalysisCount;
+            report.numericFactorizationCount = stats.numericFactorizationCount;
+            report.factorizedRhsSolveCount = stats.factorizedRhsSolveCount;
+            report.factorizedSolveCallCount = stats.factorizedSolveCallCount;
+            report.batchRhsMax = stats.batchRhsMax;
+            report.symbolicAnalysisSec = stats.symbolicAnalysisSec;
+            report.numericFactorizationSec = stats.numericFactorizationSec;
+            report.factorizedRhsSolveSec = stats.factorizedRhsSolveSec;
+
+            std::ostringstream solverSummary;
+            solverSummary << std::fixed << std::setprecision(6)
+                          << "PARDISO reuse: symbolic=" << stats.symbolicAnalysisCount
+                          << " (" << stats.symbolicAnalysisSec << " s), numeric="
+                          << stats.numericFactorizationCount << " ("
+                          << stats.numericFactorizationSec << " s), RHS="
+                          << stats.factorizedRhsSolveCount << " vectors / "
+                          << stats.factorizedSolveCallCount << " calls, batch_max="
+                          << stats.batchRhsMax << " ("
+                          << stats.factorizedRhsSolveSec << " s)";
+            log.info(solverSummary.str());
+        }
+
         const std::vector<SParameterPoint>& sparams = swept.points;
         const std::vector<std::complex<double>>& lastEdgeDofs = swept.lastEdgeDofs;
         const double lastFrequency = swept.lastFrequencyHz;

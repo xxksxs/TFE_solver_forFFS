@@ -14,9 +14,9 @@
 2. **GAWE**：在单个展开点生成 AWE 矩向量，正交化后构造 Galerkin 降阶空间。它不走 Padé 标量外推，而是在线求解小型 reduced FEM 系统。
 3. **MGAWE**：把多个展开点产生的 AWE/GAWE 向量一起正交化，形成统一 Galerkin 降阶空间。
    重点是宽带精度和残差正交，不是多个局部 ROM 的简单拼接。
-4. **WCAWE**：全称是 **Well-Conditioned Asymptotic Waveform Evaluation**。它通过非奇异上三角
-   系数矩阵把传统 AWE 矩向量组合为良条件基；当系数矩阵取单位阵时退化为 AWE，当系数来自
-   modified Gram-Schmidt 时得到稳定的 Arnoldi-like 过程。
+4. **WCAWE**：全称是 **Well-Conditioned Asymptotic Waveform Evaluation**。它把 MGS 产生的非奇异上三角
+   系数矩阵反馈到后续矩递推，通过论文校正项在生成阶段维持良条件和矩匹配；`U=I` 时退化为 AWE。
+   论文另行指出存在一种不同且复杂的 `U` 可对应扩维线性化系统的 Arnoldi 向量，不能与 MGS 系数混写。
 
 因此，WCAWE 的 `W` 表示良条件化，不应设计为外部频率/端口偏好策略。
 
@@ -64,12 +64,12 @@ src/fastsweep/
 - [AWE skill](awe-skill.md)：单展开点系统矩递推 + Padé 极点留数近似。
 - GAWE：单展开点系统矩递推 + 正交化 Galerkin ROM；工程上可复用 MGAWE 的单点路径。
 - [MGAWE skill](mgawe-skill.md)：多个展开点同时构造统一 Galerkin 降阶空间。
-- [WCAWE skill](wcawe-skill.md)：良条件 AWE，通过上三角正交化系数稳定矩基。
+- [WCAWE skill](wcawe-skill.md)：论文一致的良条件 AWE；完整推导见 [LaTeX](wcawe-theory-cn.tex) 与 [PDF](wcawe-theory-cn.pdf)，落地接口与验收见 [代码实现规范](wcawe-implementation-skill.md)。
 - [统一校验方法](validation.md)：三类算法进入实现前后的数值可靠性和工程验收。
 
 ## 与现有 ALPS/Krylov 文档的关系
 
-当前 `--sweep alps` 已实现单展开点、块 shift-and-invert Krylov、复对称 Galerkin ROM。它和
+当前 `--sweep alps` 已实现中心单展开点的标准双边 Lanczos-Padé。它和
 GAWE/MGAWE/WCAWE 的工程基础高度重合：都需要仿射系统、展开点因式分解、基生成、正交化、投影和
 S 参数还原。
 

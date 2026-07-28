@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
 
 #ifdef BPFEM_USE_MKL
@@ -22,6 +23,12 @@ public:
     MklPardisoSolver& operator=(const MklPardisoSolver&) = delete;
 
     SolveResult solve(const SparseMatrix& matrix, const std::vector<std::complex<double>>& rhs);
+    void factorize(const SparseMatrix& matrix);
+    SolveResult solveFactorized(const std::vector<std::complex<double>>& rhs);
+    std::vector<SolveResult> solveFactorizedBatch(
+        const std::vector<std::vector<std::complex<double>>>& rhsList);
+    void clearFactorization();
+    linalg::FactorizationStatistics factorizationStatistics() const { return statistics_; }
 
 private:
 #ifdef BPFEM_USE_MKL
@@ -34,9 +41,14 @@ private:
     std::array<MKL_INT, 64> iparm_{};
     std::vector<MKL_INT> ia_;
     std::vector<MKL_INT> ja_;
+    std::vector<MKL_Complex16> factorValues_;
+    std::vector<MKL_Complex16> rhsValues_;
+    std::vector<MKL_Complex16> solutionValues_;
     MKL_INT n_ = 0;
     bool analyzed_ = false;
+    bool factorized_ = false;
 #endif
+    linalg::FactorizationStatistics statistics_;
 };
 
 }  // namespace fem

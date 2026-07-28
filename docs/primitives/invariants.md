@@ -6,6 +6,12 @@
 
 AEDT 中的端口 faceId 必须能在 NGMesh 表面三角形中找到。
 
+对于 AEDT 中采用 Objects(...) 定义的 sheet-object 波端口，必须满足：
+
+- NGMesh 保留对应 object body 的完整六向包围盒；
+- sheet 包围盒与一个且仅一个保留网格面的包围盒重合；
+- PortFaceResolver 在建立 EdgeTopology 前已经解析出有效 faceId。
+
 如果匹配失败：
 
 - 端口模式可能为空。

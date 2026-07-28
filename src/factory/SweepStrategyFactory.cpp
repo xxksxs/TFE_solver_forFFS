@@ -1,10 +1,10 @@
 // Implements factory::makeSweepStrategy. See header for the contract.
 //
 // Routing: read Options::sweepStrategy, instantiate the matching concrete
-// ISweepStrategy and copy any strategy-specific configuration (krylovOrder,
+// ISweepStrategy and copy any strategy-specific configuration (order,
 // expansion frequency) into its options object. AlpsOptions::expansionFrequencyHz
 // is forwarded as 0.0 when the user did not pass --alps-expansion; AlpsSweep::run
-// then defaults it to the band center, see sweep/AlpsSweep.cpp.
+// then uses the stable band-center single-point model, see sweep/AlpsSweep.cpp.
 //
 // Adding a new sweep strategy requires:
 //   1. Implement ISweepStrategy in include/bpfem/sweep/<X>Sweep.hpp + .cpp
@@ -32,13 +32,9 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
     switch (options.sweepStrategy) {
         case SweepStrategy::Alps: {
             sweep::AlpsOptions alpsOpts;
-            alpsOpts.krylovOrder = options.alpsKrylovOrder;
+            alpsOpts.order = options.alpsOrder;
             alpsOpts.expansionFrequencyHz = options.alpsExpansionFrequencyHz;
-            // AlpsSweep needs the project / assembler / portModeSolver
-            // references at construction so it can build the offline ROM
-            // before run() is called; SweepContext.solver is *not* used by
-            // AlpsSweep (it owns its own internal Pardiso for the offline
-            // factorization).
+            // ALPS 保存装配器引用，实际稀疏后端由 SweepContext 注入。
             return std::make_unique<sweep::AlpsSweep>(project, assembler, portModeSolver,
                                                        alpsOpts);
         }

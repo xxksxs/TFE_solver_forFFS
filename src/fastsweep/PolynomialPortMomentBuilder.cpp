@@ -4,6 +4,7 @@
 #include "bpfem/fastsweep/LinearAlgebra.hpp"
 #include "bpfem/fastsweep/PolynomialMomentRecurrence.hpp"
 #include "bpfem/fastsweep/PortModeUtilities.hpp"
+#include "bpfem/linalg/FactorizedSolveSession.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
 
 #include <algorithm>
@@ -78,6 +79,99 @@ PolynomialPortMomentBuilder::buildPortVectors(const FEMAssembler::AffineSystem& 
 }
 
 // 在无损材料假设下生成端口边界条件随频率变化的一组 AWE 矩向量。
+// 构造 ALPS 文档 P1 方案的一阶端口仿射系统，保留端口导纳与激励的一阶变化。
+PolynomialPortMomentBuilder::LosslessLinearization
+PolynomialPortMomentBuilder::buildLosslessLinearization(
+    const ProjectDefinition& project,
+    const FEMAssembler& assembler,
+    const PortModeSolver& portModeSolver,
+    const FEMAssembler::AffineSystem& affine,
+    double expansionFrequencyHz,
+    const std::vector<std::vector<Complex>>& portVectors) {
+    const int virtualPortCount = static_cast<int>(affine.portCoupling.size());
+    if (static_cast<int>(portVectors.size()) != virtualPortCount) {
+        throw std::runtime_error(
+            "PolynomialPortMomentBuilder: port vector count mismatch in linearization");
+    }
+
+    LosslessLinearization out;
+    const double kExpansion = 2.0 * pi * expansionFrequencyHz / c0;
+    out.lambda0 = kExpansion * kExpansion;
+    out.lambdaScale = std::max(out.lambda0, 1.0);
+    out.matrixAtExpansion = assembler.assemble(expansionFrequencyHz, out.rhs0);
+    out.rhs1.assign(out.rhs0.size(), Complex(0.0, 0.0));
+    out.portAdmittanceFirstCoefficients.assign(
+        static_cast<std::size_t>(virtualPortCount), 0.0);
+
+    for (int v = 0; v < virtualPortCount; ++v) {
+        const double cutoffSquared =
+            affine.portCutoffSquared[static_cast<std::size_t>(v)];
+        const double betaSquared = out.lambda0 - cutoffSquared;
+        if (betaSquared <= 0.0) {
+            throw std::runtime_error(
+                "Fast-sweep P1 expansion point must be above every retained port-mode cutoff");
+        }
+        const double beta0 = std::sqrt(betaSquared);
+        out.portAdmittanceFirstCoefficients[static_cast<std::size_t>(v)] =
+            out.lambdaScale / (2.0 * beta0);
+
+        if (!affine.isExcitationMode[static_cast<std::size_t>(v)]) {
+            continue;
+        }
+        const int projectPort = affine.projectPortIndex[static_cast<std::size_t>(v)];
+        if (projectPort < 0 || static_cast<std::size_t>(projectPort) >= project.ports.size()) {
+            throw std::runtime_error(
+                "PolynomialPortMomentBuilder: invalid project port in linearization");
+        }
+        const PortMode& mode = virtualPortMode(portModeSolver, affine, v);
+        const double normalization0 = powerNormalizationFactor(mode, expansionFrequencyHz);
+        if (normalization0 <= 0.0) {
+            continue;
+        }
+        const auto& port = project.ports[static_cast<std::size_t>(projectPort)];
+        const Complex incident0 = std::polar(
+            std::sqrt(std::max(port.magnitudeW, 0.0)) * normalization0,
+            port.phaseDeg * pi / 180.0);
+        const Complex rhs0Factor = Complex(0.0, 2.0 * beta0) * incident0;
+        const double rhsFirstRatio = 0.25 * out.lambdaScale
+            * (1.0 / betaSquared + 1.0 / out.lambda0);
+        const Complex rhsFirstFactor = rhs0Factor * rhsFirstRatio;
+        const auto& portVector = portVectors[static_cast<std::size_t>(v)];
+        for (std::size_t i = 0; i < out.rhs1.size(); ++i) {
+            out.rhs1[i] += rhsFirstFactor * portVector[i];
+        }
+    }
+    return out;
+}
+
+// 计算 A1*x；A1 同时包含质量矩阵项和端口传播常数的一阶导数项。
+std::vector<PolynomialPortMomentBuilder::Complex>
+PolynomialPortMomentBuilder::applyLosslessFirstOrderMatrix(
+    const FEMAssembler::AffineSystem& affine,
+    const LosslessLinearization& linearization,
+    const std::vector<std::vector<Complex>>& portVectors,
+    const std::vector<Complex>& x) {
+    if (x.size() != affine.M.size()
+        || portVectors.size() != linearization.portAdmittanceFirstCoefficients.size()) {
+        throw std::runtime_error(
+            "PolynomialPortMomentBuilder: incompatible vector in first-order matrix action");
+    }
+    std::vector<Complex> out = affine.M.multiply(x);
+    for (auto& value : out) {
+        value *= -linearization.lambdaScale;
+    }
+    for (std::size_t v = 0; v < portVectors.size(); ++v) {
+        const double coefficient = linearization.portAdmittanceFirstCoefficients[v];
+        const auto& portVector = portVectors[v];
+        const Complex projection = bilinear(portVector, x);
+        const Complex scale(0.0, coefficient);
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] += scale * projection * portVector[i];
+        }
+    }
+    return out;
+}
+
 std::vector<std::vector<PolynomialPortMomentBuilder::Complex>>
 PolynomialPortMomentBuilder::generateLosslessMoments(
     const ProjectDefinition& project,
@@ -103,9 +197,9 @@ PolynomialPortMomentBuilder::generateLosslessMoments(
         throw std::runtime_error("PolynomialPortMomentBuilder: expansion RHS is empty");
     }
 
+    linalg::FactorizedSolveSession solveSession(solver, a0, solverConfig);
     auto solveAtExpansion = [&](const std::vector<Complex>& rhs) {
-        SolveResult result = solver.solve(a0, rhs, solverConfig);
-        return result.field;
+        return solveSession.solve(rhs).field;
     };
 
     const int virtualPortCount = static_cast<int>(affine.portCoupling.size());
@@ -117,9 +211,9 @@ PolynomialPortMomentBuilder::generateLosslessMoments(
     std::vector<std::vector<double>> admittanceCoeffs(
         static_cast<std::size_t>(virtualPortCount),
         std::vector<double>(static_cast<std::size_t>(momentCount), 0.0));
-    std::vector<std::vector<Complex>> rhsCoefficients(
-        static_cast<std::size_t>(momentCount),
-        std::vector<Complex>(fullDim, Complex(0.0, 0.0)));
+    std::vector<std::vector<Complex>> rhsPortCoefficients(
+        static_cast<std::size_t>(virtualPortCount),
+        std::vector<Complex>(static_cast<std::size_t>(momentCount), Complex(0.0, 0.0)));
 
     for (int v = 0; v < virtualPortCount; ++v) {
         const double kc2 = affine.portCutoffSquared[static_cast<std::size_t>(v)];
@@ -160,14 +254,30 @@ PolynomialPortMomentBuilder::generateLosslessMoments(
             const Complex coeff = rhsFactor0
                 * rhsRatio[static_cast<std::size_t>(r)]
                 * powInt(lambdaScale, r);
-            auto& br = rhsCoefficients[static_cast<std::size_t>(r)];
-            const auto& m = portVectors[static_cast<std::size_t>(v)];
-            for (std::size_t i = 0; i < fullDim; ++i) {
-                br[i] += coeff * m[i];
-            }
+            rhsPortCoefficients[static_cast<std::size_t>(v)][static_cast<std::size_t>(r)] =
+                coeff;
         }
     }
-    rhsCoefficients.front() = rhs0;
+
+    // 每一阶只构造当前 RHS，避免保存 momentCount 个全尺寸向量。
+    auto rhsCoefficientAt = [&](std::size_t order) {
+        if (order == 0) {
+            return rhs0;
+        }
+        std::vector<Complex> rhs(fullDim, Complex(0.0, 0.0));
+        for (int v = 0; v < virtualPortCount; ++v) {
+            const Complex coeff =
+                rhsPortCoefficients[static_cast<std::size_t>(v)][order];
+            if (coeff == Complex(0.0, 0.0)) {
+                continue;
+            }
+            const auto& modeVector = portVectors[static_cast<std::size_t>(v)];
+            for (std::size_t i = 0; i < fullDim; ++i) {
+                rhs[i] += coeff * modeVector[i];
+            }
+        }
+        return rhs;
+    };
 
     std::vector<PolynomialMomentRecurrence::LinearOperator> matrixCoefficientOperators;
     matrixCoefficientOperators.reserve(static_cast<std::size_t>(std::max(0, momentCount - 1)));
@@ -200,7 +310,8 @@ PolynomialPortMomentBuilder::generateLosslessMoments(
     }
 
     return PolynomialMomentRecurrence::generatePolynomialMoments(
-        rhsCoefficients, matrixCoefficientOperators, solveAtExpansion);
+        static_cast<std::size_t>(momentCount), rhsCoefficientAt,
+        matrixCoefficientOperators, solveAtExpansion);
 }
 
 }  // namespace fem::fastsweep

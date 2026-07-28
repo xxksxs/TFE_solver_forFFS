@@ -16,10 +16,8 @@ namespace fem::sweep {
 
 // Per-call data passed to a sweep strategy. Holds references only.
 //
-// `solver` is the linear-system backend used by direct strategies. Adaptive
-// strategies (ALPS) build their own internal direct solver because their
-// expansion-point factorization needs to outlive a single solve and lives
-// on a different sparsity pattern than `assembler.assemble(f)`.
+// solver 是应用层选定的线性求解后端。ALPS 与 AWE-family 通过能力接口
+// 在离线阶段复用展开点分解，迭代后端则自动回退到普通 solve。
 struct SweepContext {
     const ProjectDefinition& project;
     const FEMAssembler& assembler;
@@ -64,13 +62,22 @@ struct SweepResult {
     std::vector<SParameterPoint> points;
     std::vector<std::complex<double>> lastEdgeDofs;
     double lastFrequencyHz = 0.0;
+
+    // Fast-sweep 的细粒度性能统计；direct 等策略可保持为零。
+    double offlineBuildSec = 0.0;
+    double portLinearizationSec = 0.0;
+    double lanczosOperatorSec = 0.0;
+    double poleDecompositionSec = 0.0;
+    double orthogonalizationSec = 0.0;
+    double romProjectionSec = 0.0;
+    double onlineSweepSec = 0.0;
 };
 
 // Frequency-sweep strategy interface.
 //
 // Concrete kinds:
 //   - DirectSweep   per-frequency assemble + ISparseSolver::solve, no MOR
-//   - AlpsSweep     single-point Krylov MOR, complex-symmetric Galerkin
+//   - AlpsSweep     single-point two-sided Lanczos-Pade transfer models
 class ISweepStrategy {
 public:
     virtual ~ISweepStrategy() = default;

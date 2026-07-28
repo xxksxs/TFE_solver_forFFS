@@ -610,7 +610,7 @@ Galerkin 投影。$\bm K,\bm M$ 的实对称性 $+$ 端口低秩外积的复对�
     \bm A_0\bm w_v^{(k+1)}=\bm M\bm w_v^{(k)}
 \end{equation}
 （注意右端只用到\emph{频率无关} 的 $\bm M$）生成 $r$ 阶子空间，再做 modified Gram--Schmidt 正交化得到 $\bm V$。
-因此当前实现更准确地说是\emph{单点、M-dominant 的 shift-and-invert Krylov--Galerkin ROM}：它复用了 ALPS/矩匹配文献中“一次或少数几次全空间因式分解 + 小型有理模型”的思想 \cite{Bracken1998,Sun2001,Anderson2004}，但没有显式构造 Lanczos 三对角矩阵，也没有对 $\beta_v(\omega)$ 的导数项做严格 Padé 矩匹配。
+上述 M-dominant shift-and-invert Krylov--Galerkin ROM 是仓库的早期实现记录；当前 \code{AlpsSweep} 已升级为后文所述的双边 Lanczos--Padé，并在 P1 线性化中显式包含 $\beta_v(\omega)$ 与激励右端的一阶导数。
 投影后的 ROM
 \begin{equation}
     \bm K_r=\bm V^{\transpose}\bm K\bm V,\qquad
@@ -731,126 +731,45 @@ B. Anderson, J. E. Bracken, J. B. Manges, G. Peng, and Z. Cendes,
 频率依赖只出现在标量函数 $k_0^2(\omega)$ 与 $Y_v(\omega)$ 中，矩阵结构本身是固定的。
 这正是 \code{AlpsSweep} 能把“全矩阵扫频”转化成“少量小矩阵扫频”的根本原因。
 
-\subsection{离线阶段：以中心频率建立展开基}
+\subsection{当前 ALPS：双边 Lanczos--Padé}
 
-\code{AlpsSweep::buildOffline()} 首先选一个展开中心频率 $\omega_0$，并调用
-\code{assembler.assemble(omega0)} 得到与 direct path 一致的全空间矩阵
+当前 \code{AlpsSweep} 不再使用早期的单边 Krylov--Galerkin MVP。离线阶段先在
+展开频率 $\omega_0$ 调用 \code{assembler.assemble(omega0)} 得到与 direct path 一致的
+$\bm A_0$ 与 $\bm b_0$，再由
+\code{PolynomialPortMomentBuilder::buildLosslessLinearization()} 构造文档 P1 近似
 \begin{equation}
-    \bm A_0 := \bm A(\omega_0).
+  \bm A(t)=\bm A_0+t\bm A_1,\qquad
+  \bm b(t)=\bm b_0+t\bm b_1,\qquad
+  t=\frac{k_0^2-k_{0,\mathrm{exp}}^2}{k_{0,\mathrm{exp}}^2}.
 \end{equation}
-在理想传播模记号下，$\bm A_0$ 既包含体积项 $\bm K-k_0^2(\omega_0)\bm M$，也包含中心频率处的端口秩 1 项。
-随后对每个虚拟端口 $v$ 解线性方程
+其中 $\bm A_1$ 同时包含质量矩阵项和端口传播常数 $\beta_v$ 的一阶导数，
+$\bm b_1$ 则保留端口激励与功率归一化的一阶变化。
+
+为把仿射右端写成常输入状态空间，代码使用一个标量增广自由度：
 \begin{equation}
-    \bm A_0\bm w_v^{(1)}=\bm m_v,
-    \label{eq:start-vector}
+ \bm L_0=\begin{bmatrix}\bm A_0&-\bm b_0\\0&1\end{bmatrix},\quad
+ \bm L_1=\begin{bmatrix}\bm A_1&-\bm b_1\\0&0\end{bmatrix},\quad
+ \bm G=-\bm L_0^{-1}\bm L_1,\quad
+ \bm z_0=\begin{bmatrix}\bm A_0^{-1}\bm b_0\\1\end{bmatrix}.
 \end{equation}
-这一步是 ALPS / AWE / Krylov 族方法中典型的 shift-and-invert 起步：
-把“端口耦合向量”经过 $\bm A_0^{-1}$ 滤波后，得到最能反映该端口局部频响的初始方向。
-如果某个端口有多个保留模，则每个虚拟端口各自产生一个起始向量。
-
-接下来，\code{AlpsSweep} 不再直接使用原始的频域矩阵，而是用固定的递推关系扩展子空间。当前实现的核心递推是
+\code{LanczosPadeModel} 对 $\bm G$ 和 $\bm G^{\transpose}$ 构造左右 Krylov 基
+$\bm V_q,\bm W_q$，并通过两遍再双正交化保持
+$\bm W_q^{\transpose}\bm V_q\simeq\bm I$。小矩阵
 \begin{equation}
-    \bm A_0\bm w_v^{(k+1)}=\bm M\bm w_v^{(k)},\qquad k=1,2,\dots,r-1.
-    \label{eq:krylov-recursion}
+  \bm T_q=\bm W_q^{\transpose}\bm G\bm V_q
 \end{equation}
-这里右端只用到频率无关的 $\bm M$，因此每次递推都等价于“先乘一次质量矩阵，再用同一个分解好的 $\bm A_0$ 回代”。
-这就把大量频点的复杂性压缩进了一个公共子空间中。
-
-为了避免不同端口、不同阶次的向量线性相关，递推得到的所有向量会做 modified Gram--Schmidt 正交化，形成正交基矩阵
+在数值误差范围内为三对角矩阵。S11 与 S21 分别使用对应端口观测向量建立标量
+$[q-1/q]$ Padé 模型；在线阶段求解
 \begin{equation}
-    \bm V=[\bm v_1,\bm v_2,\dots,\bm v_r],\qquad \bm V^{\transpose}\bm V=\bm I.
+  (\bm I-t\bm T_q)\bm y=\bm W_q^{\transpose}\bm z_0
 \end{equation}
-这一步在实现上可以概括为：对每个虚拟端口分别启动一次 shift-and-invert 递推，逐阶生成向量，再把全体向量汇总后做正交化与去重。其算法结构可写成如下伪代码。
+并做端口功率归一化。正常路径使用 Thomas 递推，代价为 $\mathcal O(q)$，而不是
+逐频点求解 Galerkin 稠密 ROM。
 
-\begin{lstlisting}[language=C++,caption={\code{AlpsSweep} 离线阶段的虚拟端口子空间构造伪代码},label={lst:alps-offline-pseudocode}]
-Input:
-    A0 = assemble(omega0)        // center-frequency full matrix
-    M                              // frequency-independent mass matrix
-    virtualPorts = {m_v}
-    r                              // target subspace order per start vector
-Output:
-    V                              // orthonormal basis for ROM
-
-W = []
-for each virtual port v in virtualPorts:
-    w1 = solve(A0, m_v)
-    append w1 to W
-
-    w_prev = w1
-    for k = 1 .. r-1:
-        rhs = M * w_prev
-        w_next = solve(A0, rhs)
-        append w_next to W
-        w_prev = w_next
-
-V = []
-for each w in W:
-    for each q in V:
-        w = w - q * (q^T * w)      // modified Gram-Schmidt, 1st pass
-    for each q in V:
-        correction = q * (q^T * w) // optional reorthogonalization pass
-        w = w - correction
-    if norm(w) > tol:
-        w = w / norm(w)
-        append w to V
-return V
-\end{lstlisting}
-
-于是，\code{AlpsSweep} 的离线阶段本质上是在构造一个“对全空间响应最有代表性”的低维试探空间。
-
-\subsection{ROM 矩阵是如何投影出来的}
-
-一旦有了基 \(\bm V\)，ROM 矩阵就通过 Galerkin 投影得到：
-\begin{equation}
-    \bm K_r=\bm V^{\transpose}\bm K\bm V,\qquad
-    \bm M_r=\bm V^{\transpose}\bm M\bm V,\qquad
-    \bm m_{v,r}=\bm V^{\transpose}\bm m_v.
-    \label{eq:rom-projection}
-\end{equation}
-为什么这样做是合理的？因为原系统的每一项都满足“左乘测试空间、右乘试探空间”的标准有限元变分结构：
-体积项是二次型 $\bm x^{\transpose}\bm K\bm x$ 与 $\bm x^{\transpose}\bm M\bm x$；端口项是低秩外积
-$\bm m_v\bm m_v^{\transpose}$。在 Galerkin 框架下，只要把未知场近似为
-\begin{equation}
-    \bm x(\omega)\approx\bm V\bm x_r(\omega),
-\end{equation}
-并用同一个 $\bm V$ 左乘残差，就会自然得到小系统
-\begin{equation}
-    \bm V^{\transpose}\bm A(\omega)\bm V\,\bm x_r(\omega)=\bm V^{\transpose}\bm b(\omega).
-\end{equation}
-将 \eqref{eq:alps-full-affine} 代入后，立刻得到
-\begin{equation}
-    \Bigl(\bm K_r-k_0^2(\omega)\bm M_r+\sum_{v=1}^{N_v}Y_v(\omega)\bm m_{v,r}\bm m_{v,r}^{\transpose}\Bigr)
-    \bm x_r(\omega)=\bm b_r(\omega),
-    \label{eq:rom-system}
-\end{equation}
-其中
-\begin{equation}
-    \bm b_r(\omega)=2\sum_{v\in\mathcal{E}}Y_v(\omega)a_v^{\rm inc}\bm m_{v,r}.
-\end{equation}
-这说明 ROM 并不是“重新拟合”全系统，而是把同一仿射结构投影到了低维空间。
-
-\subsection{为什么端口项在 ROM 中仍保持秩 1}
-
-端口项在全空间是 $\bm m_v\bm m_v^{\transpose}$，它的秩至多为 1。投影后：
-\begin{equation}
-    \bm V^{\transpose}(\bm m_v\bm m_v^{\transpose})\bm V
-    =(\bm V^{\transpose}\bm m_v)(\bm V^{\transpose}\bm m_v)^{\transpose}
-    =\bm m_{v,r}\bm m_{v,r}^{\transpose}.
-\end{equation}
-所以端口项的低秩结构被完全保留，只是向量长度从全空间维数 $N$ 变成了 ROM 维数 $r$。
-这也是 \code{AlpsSweep} 的关键优势之一：频率变化时，只需更新标量系数 $Y_v(\omega)$，无需重装配稀疏矩阵。
-
-\subsection{和 ALPS 文献中的矩阵观点对应起来}
-
-从文献角度看，\cite{Bracken1998,Sun2001,Anderson2004} 中的 ALPS / AWE / MOR 方法，
-本质上都是把一个关于频率的矩阵函数写成“若干固定矩阵 + 标量函数”的形式，再围绕某个展开点构造低维近似。
-这里的 \code{AlpsSweep} 做法与其一致，只是实现上更贴近有限元工程：
-\begin{enumerate}[leftmargin=2em]
-\item 先把有限元问题拆成频率无关的 \(\bm K,\bm M,\bm m_v\)；
-\item 再用 \(\bm A_0^{-1}\) 驱动 Krylov 递推生成基；
-\item 最后在小空间里重建每个频点的矩阵 \eqref{eq:rom-system}。
-\end{enumerate}
-因此，所谓“构造 ROM 矩阵”，并不是凭空造一个新模型，而是对全空间仿射系统做严格的投影降维。
+PARDISO 生命周期由 \code{FactorizedSolveSession} 管理：每个展开点一次数值分解，
+全部左右 Lanczos 算子作用只做回代。默认采用频带中心单展开点；可靠的自适应多点
+仍需加入全阶残差探针后启用。双正交误差、三对角泄漏、最终耦合量和击穿状态写入
+\code{diagnostics.json}。
 
 \subsection{为何 \code{buildAffineSystem()} 足够}
 

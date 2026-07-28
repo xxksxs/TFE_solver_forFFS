@@ -35,7 +35,7 @@ K_port v = k_c^2 M_port v
 ### 1.1 BP filter 验证（vs HFSS TFE 参考）
 
 `scripts/compare_with_hfss.py` 把 APM、TFE-1、TFE-5 三条曲线一起与
-`S Parameter Plot 1.csv`（HFSS 用 TFE 端口在该几何上扫频得到的 |S11|/|S21| 参考）做对比。`--basis-order 1 --sweep alps --alps-krylov-order 30 --max-sweep-points 101` 运行结果：
+`wg_bp_filter_S_parameters.csv`（HFSS 用 TFE 端口在该几何上扫频得到的 |S11|/|S21| 参考）做对比。`--basis-order 1 --sweep alps --alps-order 12 --max-sweep-points 101` 运行结果：
 
 ```
 HFSS  |S21| peak @ 41.2000 GHz; 3-dB band 40.60 - 42.22 GHz (center 41.41 GHz)
@@ -115,11 +115,11 @@ CMakeLists.txt                                             # 加 src/apm + src/t
 
 ## 7. 与 HFSS TFE 参考的对比
 
-`S Parameter Plot 1.csv` 是 HFSS 用 TFE 端口在该 BP 滤波器上扫频得到的参考曲线（`mag(S(1,1))` / `mag(S(2,1))`，101 个频点 40–43 GHz）。比较脚本 `scripts/compare_with_hfss.py` 接受任意多个 solver run 标签并叠加绘图：
+`wg_bp_filter_S_parameters.csv` 是 HFSS 用 TFE 端口在该 BP 滤波器上扫频得到的参考曲线（`mag(S(1,1))` / `mag(S(2,1))`，101 个频点 40–43 GHz）。比较脚本 `scripts/compare_with_hfss.py` 接受任意多个 solver run 标签并叠加绘图：
 
 ```powershell
 python scripts\compare_with_hfss.py `
-    "S Parameter Plot 1.csv" `
+    "wg_bp_filter_S_parameters.csv" `
     result/result_COMPARE `
     --solver "APM=result\result_DIRECT\s_parameters.csv" `
     --solver "TFE-1=result\result_DIRECT\s_parameters.csv" `

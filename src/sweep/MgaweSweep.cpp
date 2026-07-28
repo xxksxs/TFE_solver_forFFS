@@ -6,6 +6,7 @@
 #include "bpfem/fastsweep/PortModeUtilities.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <complex>
 #include <cstddef>
 #include <iomanip>
@@ -68,13 +69,20 @@ SweepResult MgaweSweep::run(const std::vector<double>& frequencies, const SweepC
     linalg::SolverConfig solverCfg;
     solverCfg.maxIterations = ctx.linearMaxIterations;
     solverCfg.tolerance = ctx.linearTolerance;
+    const auto offlineStarted = std::chrono::steady_clock::now();
     const int dim = buildOffline(expansionFrequencies, ctx.solver, solverCfg);
+    const double offlineBuildSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - offlineStarted).count();
     ctx.log.info("MGAWE ROM dimension: " + std::to_string(dim));
     ctx.log.info("MGAWE retained candidate columns: " + std::to_string(retainedColumns_));
     ctx.log.info("MGAWE deflated candidate columns: " + std::to_string(deflatedColumns_));
 
     SweepResult out;
+    out.offlineBuildSec = offlineBuildSec;
+    out.orthogonalizationSec = orthogonalizationSec_;
+    out.romProjectionSec = romProjectionSec_;
     out.points.reserve(frequencies.size());
+    const auto onlineStarted = std::chrono::steady_clock::now();
     for (std::size_t i = 0; i < frequencies.size(); ++i) {
         const double f = frequencies[i];
         if (i == 0 || (i + 1) % 50 == 0 || i + 1 == frequencies.size()) {
@@ -85,6 +93,8 @@ SweepResult MgaweSweep::run(const std::vector<double>& frequencies, const SweepC
         out.points.push_back(evaluate(f));
         out.lastFrequencyHz = f;
     }
+    out.onlineSweepSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - onlineStarted).count();
     if (!frequencies.empty()) {
         out.lastEdgeDofs = reconstructField(frequencies.back());
     }
@@ -137,15 +147,20 @@ int MgaweSweep::buildOffline(const std::vector<double>& expansionFrequencies,
     basis_.clear();
     retainedColumns_ = 0;
     deflatedColumns_ = 0;
+    orthogonalizationSec_ = 0.0;
+    romProjectionSec_ = 0.0;
     const int candidateCount =
         static_cast<int>(expansionFrequencies.size()) * std::max(1, options_.localOrder);
     basis_.reserve(static_cast<std::size_t>(candidateCount));
 
     for (double expansionHz : expansionFrequencies) {
-        const auto localMoments = buildLocalMoments(expansionHz, solver, solverConfig, portVectors);
-        for (const auto& moment : localMoments) {
-            appendIfIndependent(std::vector<Complex>(moment.begin(), moment.end()));
+        auto localMoments = buildLocalMoments(expansionHz, solver, solverConfig, portVectors);
+        const auto orthogonalizationStarted = std::chrono::steady_clock::now();
+        for (auto& moment : localMoments) {
+            appendIfIndependent(std::move(moment));
         }
+        orthogonalizationSec_ += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - orthogonalizationStarted).count();
     }
 
     romDim_ = static_cast<int>(basis_.size());
@@ -153,7 +168,10 @@ int MgaweSweep::buildOffline(const std::vector<double>& expansionFrequencies,
         throw std::runtime_error("MgaweSweep: global basis collapsed to zero dimension");
     }
 
+    const auto projectionStarted = std::chrono::steady_clock::now();
     projectReducedModel(portVectors);
+    romProjectionSec_ = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - projectionStarted).count();
     ready_ = true;
     return romDim_;
 }

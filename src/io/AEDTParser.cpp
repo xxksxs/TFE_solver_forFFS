@@ -76,6 +76,7 @@ void AEDTParser::parsePorts(const std::string& text, ProjectDefinition& project)
         PortDefinition port;
         port.id = static_cast<int>(valueOr(body, R"(ID=([0-9]+))", -1.0));
         port.faceId = static_cast<int>(valueOr(body, R"(Faces\(([0-9]+)\))", -1.0));
+        port.objectId = static_cast<int>(valueOr(body, R"(Objects\(([0-9]+)\))", -1.0));
         port.modes = static_cast<int>(valueOr(body, R"(NumModes=([0-9]+))", 1.0));
         project.ports.push_back(port);
     }

@@ -6,6 +6,7 @@
 #include "bpfem/fastsweep/PortModeUtilities.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -46,7 +47,10 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
     linalg::SolverConfig solverCfg;
     solverCfg.maxIterations = ctx.linearMaxIterations;
     solverCfg.tolerance = ctx.linearTolerance;
+    const auto offlineStarted = std::chrono::steady_clock::now();
     buildOffline(expansionHz, ctx.solver, solverCfg);
+    const double offlineBuildSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - offlineStarted).count();
 
     ctx.log.info("AWE input Padé order: ["
                  + std::to_string(inputProjectionPade_.numeratorOrder()) + "/"
@@ -56,7 +60,9 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
                  + std::to_string(outputProjectionPade_.denominatorOrder()) + "]");
 
     SweepResult out;
+    out.offlineBuildSec = offlineBuildSec;
     out.points.reserve(frequencies.size());
+    const auto onlineStarted = std::chrono::steady_clock::now();
     for (std::size_t i = 0; i < frequencies.size(); ++i) {
         const double f = frequencies[i];
         if (i == 0 || (i + 1) % 50 == 0 || i + 1 == frequencies.size()) {
@@ -67,6 +73,8 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
         out.points.push_back(evaluate(f));
         out.lastFrequencyHz = f;
     }
+    out.onlineSweepSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - onlineStarted).count();
     if (!ctx.outputDirectory.empty()) {
         fastsweep::FastSweepDiagnostics diag;
         diag.algorithm = name();

@@ -115,7 +115,7 @@ function readTiming(algo) {
   }
 }
 
-const hfssRows = readCsv("S Parameter Plot 1.csv");
+const hfssRows = readCsv("wg_bp_filter_S_parameters.csv");
 const hfssFreq = hfssRows.map((r) => Number(r["Freq [GHz]"]));
 const hfssS11 = hfssRows.map((r) => Number(r["mag(S(1,1)) []"]));
 const hfssS21 = hfssRows.map((r) => Number(r["mag(S(2,1)) []"]));
@@ -242,7 +242,7 @@ let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`;
 svg += `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n`;
 svg += `<rect width="100%" height="100%" fill="#fff"/>\n`;
 svg += `<text x="${width / 2}" y="30" text-anchor="middle" font-family="Segoe UI, Arial" font-size="22" font-weight="700">BP Filter 101-point Sweep: HFSS comparison</text>\n`;
-svg += `<text x="${width / 2}" y="52" text-anchor="middle" font-family="Segoe UI, Arial" font-size="12" fill="#555">ALPS, AWE, GAWE, MGAWE, WCAWE; PARDISO Release; reference: S Parameter Plot 1.csv</text>\n`;
+svg += `<text x="${width / 2}" y="52" text-anchor="middle" font-family="Segoe UI, Arial" font-size="12" fill="#555">ALPS, AWE, GAWE, MGAWE, WCAWE; PARDISO Release; reference: wg_bp_filter_S_parameters.csv</text>\n`;
 
 for (const panel of panels) {
   const yrange = yRanges[panel.mode];

@@ -3,107 +3,138 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 
 namespace fem::fastsweep {
 
-// 创建 WCAWE 基构造器，并设置 MGS 后残差/对角元的丢弃阈值。
-WellConditionedBasisBuilder::WellConditionedBasisBuilder(double dropTolerance)
-    : dropTolerance_(dropTolerance > 0.0 ? dropTolerance : 1.0e-12) {}
+namespace {
 
-// 清空已有基、上三角系数和条件数诊断记录，以便开始新的离线阶段。
-void WellConditionedBasisBuilder::clear() {
-    deflatedColumns_ = 0;
-    maxMomentReconstructionError_ = 0.0;
-    basis_.clear();
-    triangularR_.clear();
-    rDiagonalAbs_.clear();
-    records_.clear();
+// 将固定步长 U 的二维索引转换为行主序位置。
+std::size_t matrixIndex(int row, int col, int stride) {
+    return static_cast<std::size_t>(row) * static_cast<std::size_t>(stride)
+        + static_cast<std::size_t>(col);
 }
 
-// 向 WCAWE 基中加入一个传统 AWE 矩向量；若方向近线性相关则执行 deflation。
-bool WellConditionedBasisBuilder::append(const std::vector<Complex>& moment) {
-    std::vector<Complex> w = moment;
-    const double pre = norm2(w);
-    if (pre < dropTolerance_) {
-        ++deflatedColumns_;
-        return false;
+}  // namespace
+
+// 初始化一次 WCAWE 基构造会话，并固定 U 的存储步长。
+void WellConditionedBasisBuilder::reset(int requestedOrder,
+                                        double breakdownTolerance,
+                                        int reorthogonalizationPasses) {
+    if (requestedOrder < 1) {
+        throw std::invalid_argument(
+            "WellConditionedBasisBuilder: requested order must be positive");
+    }
+    if (!std::isfinite(breakdownTolerance) || breakdownTolerance <= 0.0) {
+        throw std::invalid_argument(
+            "WellConditionedBasisBuilder: breakdown tolerance must be finite and positive");
+    }
+    if (reorthogonalizationPasses < 1 || reorthogonalizationPasses > 2) {
+        throw std::invalid_argument(
+            "WellConditionedBasisBuilder: MGS passes must be one or two");
+    }
+    requestedOrder_ = requestedOrder;
+    breakdownTolerance_ = breakdownTolerance;
+    reorthogonalizationPasses_ = reorthogonalizationPasses;
+    basis_.clear();
+    basis_.reserve(static_cast<std::size_t>(requestedOrder));
+    upperTriangularU_.assign(
+        static_cast<std::size_t>(requestedOrder) * static_cast<std::size_t>(requestedOrder),
+        Complex(0.0, 0.0));
+}
+
+// 清空已有基和 U，防止下一次离线阶段读取旧递推状态。
+void WellConditionedBasisBuilder::clear() {
+    requestedOrder_ = 0;
+    basis_.clear();
+    upperTriangularU_.clear();
+}
+
+// 对论文递推候选做一至两遍 MGS，并保持 V_tilde=V*U 的当前列关系。
+WcaweAppendResult WellConditionedBasisBuilder::appendCandidate(
+    const std::vector<Complex>& candidate) {
+    if (requestedOrder_ < 1
+        || upperTriangularU_.size()
+            != static_cast<std::size_t>(requestedOrder_)
+                * static_cast<std::size_t>(requestedOrder_)) {
+        throw std::logic_error(
+            "WellConditionedBasisBuilder: reset must be called before appendCandidate");
+    }
+    if (basis_.size() >= static_cast<std::size_t>(requestedOrder_)) {
+        throw std::logic_error(
+            "WellConditionedBasisBuilder: requested order has already been reached");
+    }
+    if (candidate.empty()) {
+        throw std::invalid_argument(
+            "WellConditionedBasisBuilder: candidate must be non-empty");
+    }
+    if (!basis_.empty() && candidate.size() != basis_.front().size()) {
+        throw std::invalid_argument(
+            "WellConditionedBasisBuilder: candidate size does not match the basis");
     }
 
+    WcaweAppendResult result;
     const int oldDim = static_cast<int>(basis_.size());
-    std::vector<Complex> coeffs(static_cast<std::size_t>(oldDim), Complex(0.0, 0.0));
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int j = 0; j < oldDim; ++j) {
-            const Complex h = hdot(basis_[static_cast<std::size_t>(j)], w);
-            coeffs[static_cast<std::size_t>(j)] += h;
-            for (std::size_t i = 0; i < w.size(); ++i) {
-                w[i] -= h * basis_[static_cast<std::size_t>(j)][i];
+    result.column = oldDim + 1;
+    result.reorthogonalizationPasses = reorthogonalizationPasses_;
+    result.candidateNormBeforeMgs = norm2(candidate);
+    if (!std::isfinite(result.candidateNormBeforeMgs)
+        || result.candidateNormBeforeMgs <= breakdownTolerance_) {
+        return result;
+    }
+
+    std::vector<Complex> work(candidate);
+    std::vector<Complex> coefficients(
+        static_cast<std::size_t>(oldDim), Complex(0.0, 0.0));
+    for (int pass = 0; pass < reorthogonalizationPasses_; ++pass) {
+        for (int column = 0; column < oldDim; ++column) {
+            const Complex coefficient =
+                hdot(basis_[static_cast<std::size_t>(column)], work);
+            coefficients[static_cast<std::size_t>(column)] += coefficient;
+            for (std::size_t row = 0; row < work.size(); ++row) {
+                work[row] -= coefficient
+                    * basis_[static_cast<std::size_t>(column)][row];
             }
         }
     }
 
-    const double post = norm2(w);
-    if (post < dropTolerance_ * std::max(pre, 1.0)) {
-        ++deflatedColumns_;
-        return false;
+    const double diagonal = norm2(work);
+    result.diagonalAbs = diagonal;
+    if (!std::isfinite(diagonal)
+        || diagonal
+            <= breakdownTolerance_ * std::max(result.candidateNormBeforeMgs, 1.0)) {
+        return result;
     }
 
-    for (auto& z : w) {
-        z /= post;
+    for (Complex& value : work) {
+        value /= diagonal;
     }
-    basis_.push_back(std::move(w));
-    rDiagonalAbs_.push_back(post);
+    basis_.push_back(std::move(work));
+    for (int row = 0; row < oldDim; ++row) {
+        upperTriangularU_[matrixIndex(row, oldDim, requestedOrder_)] =
+            coefficients[static_cast<std::size_t>(row)];
+    }
+    upperTriangularU_[matrixIndex(oldDim, oldDim, requestedOrder_)] =
+        Complex(diagonal, 0.0);
 
-    const int newDim = oldDim + 1;
-    std::vector<Complex> newR(static_cast<std::size_t>(newDim) * static_cast<std::size_t>(newDim),
-                              Complex(0.0, 0.0));
-    for (int r = 0; r < oldDim; ++r) {
-        for (int c = 0; c < oldDim; ++c) {
-            newR[static_cast<std::size_t>(r) * static_cast<std::size_t>(newDim)
-                 + static_cast<std::size_t>(c)] =
-                triangularR_[static_cast<std::size_t>(r) * static_cast<std::size_t>(oldDim)
-                             + static_cast<std::size_t>(c)];
+    std::vector<Complex> reconstructed(candidate.size(), Complex(0.0, 0.0));
+    for (int column = 0; column <= oldDim; ++column) {
+        const Complex coefficient =
+            upperTriangularU_[matrixIndex(column, oldDim, requestedOrder_)];
+        const auto& basisVector = basis_[static_cast<std::size_t>(column)];
+        for (std::size_t row = 0; row < reconstructed.size(); ++row) {
+            reconstructed[row] += coefficient * basisVector[row];
         }
     }
-    for (int r = 0; r < oldDim; ++r) {
-        newR[static_cast<std::size_t>(r) * static_cast<std::size_t>(newDim)
-             + static_cast<std::size_t>(oldDim)] = coeffs[static_cast<std::size_t>(r)];
-    }
-    newR[static_cast<std::size_t>(oldDim) * static_cast<std::size_t>(newDim)
-         + static_cast<std::size_t>(oldDim)] = Complex(post, 0.0);
-    triangularR_ = std::move(newR);
-
-    std::vector<Complex> reconstructed(moment.size(), Complex(0.0, 0.0));
-    for (int j = 0; j < newDim; ++j) {
-        const Complex coeff = triangularR_[static_cast<std::size_t>(j)
-                                           * static_cast<std::size_t>(newDim)
-                                           + static_cast<std::size_t>(oldDim)];
-        const auto& v = basis_[static_cast<std::size_t>(j)];
-        for (std::size_t i = 0; i < reconstructed.size(); ++i) {
-            reconstructed[i] += coeff * v[i];
-        }
-    }
-    for (std::size_t i = 0; i < reconstructed.size(); ++i) {
-        reconstructed[i] -= moment[i];
-    }
-    const double reconstructionError = norm2(reconstructed) / std::max(pre, 1.0e-300);
-    maxMomentReconstructionError_ = std::max(maxMomentReconstructionError_, reconstructionError);
-
-    double minDiag = rDiagonalAbs_.front();
-    double maxDiag = rDiagonalAbs_.front();
-    for (double d : rDiagonalAbs_) {
-        minDiag = std::min(minDiag, d);
-        maxDiag = std::max(maxDiag, d);
+    for (std::size_t row = 0; row < reconstructed.size(); ++row) {
+        reconstructed[row] -= candidate[row];
     }
 
-    BasisConditionRecord rec;
-    rec.order = newDim;
-    rec.aweConditionProxy = maxDiag / std::max(minDiag, 1.0e-300);
-    rec.wcaweConditionProxy = 1.0 + orthogonalityError(basis_);
-    rec.rDiagonalAbs = post;
-    rec.orthogonalityError = rec.wcaweConditionProxy - 1.0;
-    rec.momentReconstructionError = reconstructionError;
-    records_.push_back(rec);
-    return true;
+    result.basisRelationResidual =
+        norm2(reconstructed) / std::max(result.candidateNormBeforeMgs, 1.0e-300);
+    result.orthogonalityError = orthogonalityError(basis_);
+    result.accepted = true;
+    return result;
 }
 
 }  // namespace fem::fastsweep

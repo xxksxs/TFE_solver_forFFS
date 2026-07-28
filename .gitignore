@@ -121,3 +121,9 @@ Thumbs.db
 build_log.txt
 *_stdout.log
 *_stdout.txt
+
+# Generated HFSS comparison reports. Keep the raw HFSS reference CSV files.
+hfss_*_comparison.csv
+hfss_*_comparison.svg
+hfss_*_summary.csv
+hfss_*_notes.txt

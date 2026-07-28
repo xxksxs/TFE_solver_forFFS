@@ -1,0 +1,226 @@
+% !TEX program = xelatex
+% WCAWE theory extracted from Slone, Lee, and Lee (2003).
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,geometry,hyperref,xcolor,longtable,array,enumitem}
+\geometry{margin=2.45cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+\setlist{nosep}
+\newcommand{\C}{\mathbb C}
+\newcommand{\A}{\bm A}
+\newcommand{\bvec}{\bm b}
+\newcommand{\xvec}{\bm x}
+\newcommand{\vvec}{\bm v}
+\newcommand{\wvec}{\bm w}
+\newcommand{\evec}{\bm e}
+\newcommand{\Umat}{\bm U}
+\newcommand{\Vmat}{\bm V}
+\newcommand{\Wmat}{\bm W}
+\title{Well-Conditioned AWE（WCAWE）\\论文数学过程与工程实现 Skill}
+\author{BP-FEM 快速扫频模块}
+\date{依据 Slone、Lee 与 Lee（2003）复核}
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{定位与权威来源}
+本文把 Slone、Lee 与 Lee 的 WCAWE 论文\cite{Slone2003}转换为本工程可执行的数学与软件契约。WCAWE 直接处理多项式 FEM 方程，不通过线性化增加全阶未知量，也不显式形成逐阶病态的传统 AWE 矩。它在每阶立即正交化，但必须用上三角系数矩阵的校正项保持矩匹配。论文式 (7)--(9) 是算法合规的核心判据。完整证明由原文指向作者博士论文，2003 年论文正文给出递推、算法和数值验证。
+
+\section{多项式系统与传统 AWE}
+设
+\begin{equation}
+\A(s)\xvec(s)=\bvec(s),\qquad s=\mathrm j\omega,\qquad \sigma=s-s_0,
+\end{equation}
+并在展开点写成
+\begin{equation}
+\left(\sum_{i=0}^{d_A}\sigma^i\A_i\right)\xvec(s)
+=\sum_{k=0}^{d_b}\sigma^k\bvec_k.
+\label{eq:poly}
+\end{equation}
+其中 $\A_i=\A^{(i)}(s_0)/i!$、$\bvec_k=\bvec^{(k)}(s_0)/k!$。论文用 $a_1,b_1$ 表示最高次数，本文改用 $d_A,d_b$，避免与 $\bvec_1$ 混淆。
+
+传统 AWE 系统矩为
+\begin{align}
+\wvec_1&=\A_0^{-1}\bvec_0,\\
+\wvec_n&=\A_0^{-1}\left(\bvec_{n-1}-
+\sum_{m=1}^{\min(d_A,n-1)}\A_m\wvec_{n-m}\right),\quad n\ge2,
+\label{eq:awe}
+\end{align}
+并令 $\bvec_k=0$（$k>d_b$）。传统 AWE 形成这些矩后构造 Pad\'e；GAWE 把矩矩阵 $\Wmat_q=[\wvec_1,\ldots,\wvec_q]$ 正交化后做 Galerkin 投影。病态发生在高阶矩进入正交化以前。
+
+\section{论文警告的错误实现}
+原文第 III-A 节指出：在式\eqref{eq:awe}中简单使用已归一化历史向量并立即正交化，通常不保持矩匹配。下面两条都不能称为论文 WCAWE：
+\begin{enumerate}
+\item 先完整生成传统 AWE 矩，再统一做 QR/MGS；
+\item 逐阶正交化，但不加入 $\Umat$ 子块逆乘积校正。
+\end{enumerate}
+前者是事后正交化的 GAWE 路径，后者正是论文明确反驳的朴素递推。
+
+\section{WCAWE 校正递推}
+\subsection{候选、正交基与 \texorpdfstring{$\Umat$}{U}}
+定义
+\begin{equation}
+\widetilde{\Vmat}_n=[\widetilde{\vvec}_1,\ldots,\widetilde{\vvec}_n],\qquad
+\Vmat_n=[\vvec_1,\ldots,\vvec_n].
+\end{equation}
+论文式 (8) 为
+\begin{equation}
+\boxed{\Vmat_n=\widetilde{\Vmat}_n\Umat_n^{-1}}
+\quad\Longleftrightarrow\quad
+\widetilde{\Vmat}_n=\Vmat_n\Umat_n,
+\label{eq:vu}
+\end{equation}
+其中 $\Umat_n$ 非奇异且上三角。代码若使用名称 $R$，必须声明 $R\equiv\Umat$；普通 AWE 矩阵的事后 QR 因子不能替代递推中的 $\Umat$。
+
+\subsection{式 (9)：校正乘积}
+对 $w\in\{1,2\}$，
+\begin{equation}
+\boxed{
+\bm P_{U_w}(n,m)=\prod_{t=w}^{m}
+\left(\Umat_{[t:n-m+t-1,\,t:n-m+t-1]}\right)^{-1}}
+\label{eq:pu}
+\end{equation}
+下标表示连续主子块。乘积按 $t$ 递增顺序从左到右排列，例如 $\prod_{t=1}^{2}\Umat_t^{-1}=\Umat_1^{-1}\Umat_2^{-1}$。实现应以三角回代计算 $\bm P_{U_w}(n,m)\evec_{n-m}$，禁止显式求逆。
+
+\subsection{式 (7)：候选向量}
+第一列为
+\begin{equation}
+\widetilde{\vvec}_1=\A_0^{-1}\bvec_0.
+\end{equation}
+对 $n\ge2$，
+\begin{equation}
+\boxed{
+\begin{aligned}
+\widetilde{\vvec}_n=\A_0^{-1}\Bigg[&
+\sum_{m=1}^{\min(d_b,n-1)}
+\bvec_m\,\evec_1^T\bm P_{U_1}(n,m)\evec_{n-m}
+-\A_1\vvec_{n-1}\\
+&-\sum_{m=2}^{\min(d_A,n-1)}
+\A_m\Vmat_{n-m}\bm P_{U_2}(n,m)\evec_{n-m}
+\Bigg].
+\end{aligned}}
+\label{eq:wcawe}
+\end{equation}
+第 $n$ 阶必须读取已经形成的 $\Vmat_{n-1}$ 和 $\Umat_{n-1}$。因此 $\Umat$ 是下一阶递推的输入，不是结束后才产生的诊断量。若 $\Umat=I$，式\eqref{eq:wcawe}严格退化为传统 AWE 式\eqref{eq:awe}，这是必要单元测试。
+
+\section{MGS 更新和离线算法}
+论文实际选取 MGS 系数作为 $\Umat$：
+\begin{align}
+U_{\alpha n}&=\vvec_\alpha^H\widetilde{\vvec}_n,
+&&\alpha=1,\ldots,n-1,\\
+\widetilde{\vvec}_n&\leftarrow\widetilde{\vvec}_n-U_{\alpha n}\vvec_\alpha,\\
+U_{nn}&=\lVert\widetilde{\vvec}_n\rVert_2,\\
+\vvec_n&=\widetilde{\vvec}_n/U_{nn}.
+\label{eq:mgs}
+\end{align}
+二次 MGS 的系数必须累加到同一列，保持式\eqref{eq:vu}。
+
+论文一致的离线流程：
+\begin{enumerate}
+\item 在 $s_0$ 构造 $\A_i,\bvec_k$，仅分解 $\A_0$ 一次。
+\item 生成 $\widetilde{\vvec}_1$，MGS 得到 $\vvec_1,U_{11}$。
+\item 对 $n=2,\ldots,q$：由 $\Umat_{n-1}$ 计算式\eqref{eq:pu}的作用量；按式\eqref{eq:wcawe}组装一个全阶 RHS；回代 $\A_0$；按式\eqref{eq:mgs}更新 $\Umat$；若 $|U_{nn}|$ 过小则记录 breakdown/deflation 并停止。
+\item 投影多项式系数，形成 $q$ 维 reduced model。
+\end{enumerate}
+存储为 $O(Nq)$ 的 $\Vmat_q$ 和 $O(q^2)$ 的 $\Umat_q$，不需要扩维未知量，也不需要另一份传统 AWE 矩阵。
+
+\section{Galerkin 投影与在线求解}
+论文式 (4)--(5) 与 Algorithm 1 给出
+\begin{align}
+\A_r(\sigma)&=\sum_{i=0}^{d_A}\sigma^i\Vmat_q^T\A_i\Vmat_q,\\
+\bvec_r(\sigma)&=\sum_{k=0}^{d_b}\sigma^k\Vmat_q^T\bvec_k,\\
+\bm g_q(s)&=\A_r(\sigma)^{-1}\bvec_r(\sigma),\\
+\xvec_q(s)&=\Vmat_q\bm g_q(s).
+\end{align}
+论文 MGS 使用 $H$，复对称 FEM 投影写作 $T$。工程中必须区分 Hermitian 正交化与 transpose Galerkin 投影。若改用 $H$ 投影，应作为不同变体单独证明。该 WCAWE 是多项式 Galerkin ROM，不要求再生成标量 Pad\'e 分子分母。
+
+\section{\texorpdfstring{$\Umat$}{U} 的方法意义}
+$\Umat=I$ 时退化为 AWE；存在复杂的特殊 $\Umat$ 可生成扩维线性化系统的 Arnoldi 向量；论文实际使用 MGS 系数。W 表示 well-conditioned，不表示频率、端口或经验权重。
+
+\section{模块输入输出}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\textwidth}p{0.67\textwidth}}
+\toprule 类别 & 契约 \\
+\midrule
+输入：$\A_i$ & 展开点处按 $\sigma^i$ 定义的稀疏矩阵系数，包含端口色散局部系数。\\
+输入：$\bvec_k$ & 激励局部系数，不能固定频变端口 RHS。\\
+输入：$s_0,q$ & 展开点和目标阶数。\\
+输入：求解器 & 一次 $\A_0$ 分解、多次 RHS 回代。\\
+输入：MGS & Hermitian 内积、再正交和 breakdown 阈值。\\
+输出：$\Vmat_q$ & 良条件基，列长度等于原 FEM DOF。\\
+输出：$\Umat_q$ & 论文式 (8) 的上三角 MGS 系数。\\
+输出：校正记录 & 每阶 $\bm P_{U_1},\bm P_{U_2}$ 作用、来源项范数和三角回代状态。\\
+输出：ROM & 投影后的多项式矩阵、RHS、复数 S11/S21 和按需场重构。\\
+输出：诊断 & 递推、正交、矩匹配、条件数、direct/HFSS 相对误差、时间和峰值内存。\\
+\bottomrule
+\end{longtable}
+
+\section{建议的软件边界}
+\begin{itemize}
+\item \texttt{PolynomialWcaweRecurrence}：持有 $\A_i,\bvec_k,\Vmat,\Umat$，按式 (7)--(9)逐阶生成候选。
+\item \texttt{UpperTriangularBlockAction}：通过三角回代实现 $\bm P_{U_w}(n,m)\evec$。
+\item \texttt{WellConditionedBasisBuilder}：负责 MGS、再正交、$\Umat$ 更新与 breakdown；不能把完整传统 AWE 矩作为论文主路径输入。
+\item \texttt{GalerkinReducedModel}：投影、在线求解、S 参数和场重构。
+\item \texttt{WcaweDiagnostics}：输出论文关系残差和性能统计。
+\end{itemize}
+
+\section{当前代码实现状态}
+当前实现已完成论文递推重构：
+\begin{itemize}
+\item \texttt{WcaweSweep} 使用 P1 线性化构造 $\A_0,\A_1,\bvec_0,\bvec_1$，不再生成完整传统 AWE 矩；
+\item \texttt{PolynomialWcaweRecurrence} 按式\eqref{eq:wcawe}逐阶组装校正 RHS；
+\item \texttt{UpperTriangularBlockAction} 以逆序三角回代实现式\eqref{eq:pu}，不显式求逆；
+\item \texttt{WellConditionedBasisBuilder::appendCandidate} 立即执行 MGS 并更新固定步长 $\Umat$，下一阶会读取该 $\Umat$；
+\item 最终正交基移动给 \texttt{GalerkinReducedModel}，避免同时保留传统矩和 WCAWE 基。
+\end{itemize}
+
+单元测试已覆盖非单位复杂 $\Umat$ 的乘积顺序、$\Umat=I$ 退化、式 (7)、式 (8)、传统矩子空间匹配、朴素归一化递推反例和 breakdown 后停止。因此当前代码可以标记为论文一致的单展开点 P1 WCAWE。在线阶段继续投影工程中的精确 K/M/端口频率律，这是论文基上的工程扩展，不改变离线递推定义。
+
+在 290856 个四面体、364932 个未知量、90--100 GHz、101 点、$q=12$ 和 numerical port 的基准中，S11/S21 对 HFSS 幅值相对 $L_2$ 约为 0.774\%/0.990\%；95 GHz 复数 direct 相对误差约为 $7.9\times10^{-13}$/$9.2\times10^{-14}$；求解器执行一次数值分解和 12 次回代。$q=20,30,40$ 均保持递推残差约 $4.3\times10^{-12}$、正交误差小于 $5\times10^{-14}$，但宽带误差未单调改善，所以该算例不能单独证明 WCAWE 相对 GAWE/MGAWE 的精度优势。
+
+\section{可靠性验证}
+\subsection{单元测试}
+\begin{enumerate}
+\item 强制 $\Umat=I$，式 (7) 逐列恢复式 (3)，相对误差 $\le10^{-12}$。
+\item 检查 $\|\widetilde{\Vmat}_n-\Vmat_n\Umat_n\|_F/\|\widetilde{\Vmat}_n\|_F\le10^{-12}$。
+\item 检查 $\|\A_0\widetilde{\vvec}_n-r_n^{\mathrm{WCAWE}}\|_2/\|r_n^{\mathrm{WCAWE}}\|_2\le10^{-11}$。
+\item 检查 $\|\Vmat_q^H\Vmat_q-I\|_F\le10^{-11}$，再正交后式 (8) 仍成立。
+\item 小型多项式系统比较 full/reduced 局部导数，至少前 $q$ 个系统矩相对误差 $\le10^{-10}$。
+\item 构造论文错误式 (6) 无法匹配矩的反例，确保测试能区分真正 WCAWE。
+\item 基向量长度必须等于 $N$；复对称小系统必须验证 $T$ 与 $H$ 投影不能静默混用。
+\end{enumerate}
+
+\subsection{工程验证}
+\begin{itemize}
+\item 输出 AWE 矩与 WCAWE 基条件数，并记录 $U_{nn}$、deflation 和再正交次数。
+\item 与 direct FEM 比较复数 S11/S21，以相对 $L_2$ 为主；深零点另报绝对幅值误差。
+\item 与 HFSS \texttt{IOStructure\_S\_parameters.csv} 在相同频点、端口和归一化下比较 S11/S21。
+\item 相同阶数和展开点比较 GAWE/WCAWE。高阶或病态算例中，WCAWE 应更晚停滞、矩匹配更准或以更少有效列达到同等精度；低阶简单算例不保证明显优势。
+\item 记录分解、RHS 回代、$\bm P_U$ 三角回代、MGS、投影、在线时间和峰值内存。
+\end{itemize}
+
+\section{端口色散映射}
+本工程 $\beta(\omega)=\sqrt{k_0^2-k_c^2}$ 不是全局多项式，必须在 $s_0$ 处局部展开
+\begin{equation}
+\beta(s_0+\sigma)=\sum_{j=0}^{p}\beta_j\sigma^j+O(\sigma^{p+1}),\qquad
+\beta_j=\frac{1}{j!}\frac{d^j\beta}{ds^j}(s_0).
+\end{equation}
+端口矩阵和激励必须使用相同 $\sigma$、阶数与导数约定。只展开矩阵而固定 RHS 会破坏矩匹配。
+
+\section{代码审查清单}
+\begin{enumerate}
+\item 是否有直接对应式 (7) 的逐阶候选函数？
+\item 候选生成是否读取当前 $\Umat_{n-1}$？
+\item 是否实现式 (9)，且主子块和乘积顺序正确？
+\item 是否用三角回代而非显式求逆？
+\item MGS 与再正交系数是否累加写回同一 $\Umat$？
+\item 是否区分 MGS 的 $H$ 和投影的 $T$？
+\item 是否一次分解 $\A_0$、每阶一次回代？
+\item 是否避免预先形成完整传统 AWE 矩阵？
+\item 是否输出式 (7)、式 (8)、正交和矩匹配残差？
+\item 是否以 direct/HFSS 复数 S11/S21 相对误差验收？
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{Slone2003} R. D. Slone, R. Lee, and J.-F. Lee, \emph{Well-conditioned asymptotic waveform evaluation for finite elements}, IEEE Transactions on Antennas and Propagation, vol. 51, no. 9, pp. 2442--2447, Sep. 2003, doi: 10.1109/TAP.2003.816321.
+\bibitem{Slone2001} R. D. Slone, R. Lee, and J.-F. Lee, \emph{Multipoint Galerkin asymptotic waveform evaluation for model order reduction of frequency domain FEM electromagnetic radiation problems}, IEEE Transactions on Antennas and Propagation, vol. 49, no. 10, pp. 1504--1513, Oct. 2001.
+\end{thebibliography}
+\end{document}

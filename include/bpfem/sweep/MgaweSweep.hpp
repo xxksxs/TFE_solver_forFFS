@@ -51,6 +51,8 @@ public:
     bool ready() const { return ready_; }
     double basisOrthogonalityError() const { return model_.basisOrthogonalityError(); }
     bool reducedSolveSucceeded() const { return model_.lastSolveSucceeded(); }
+    double lastOrthogonalizationSec() const { return orthogonalizationSec_; }
+    double lastRomProjectionSec() const { return romProjectionSec_; }
 
 private:
     std::vector<std::vector<Complex>> buildLocalMoments(
@@ -76,6 +78,8 @@ private:
     int numVirtualPorts_ = 0;
     int retainedColumns_ = 0;
     int deflatedColumns_ = 0;
+    double orthogonalizationSec_ = 0.0;
+    double romProjectionSec_ = 0.0;
 
     FEMAssembler::AffineSystem affine_;
     std::vector<std::vector<Complex>> basis_;

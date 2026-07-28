@@ -26,7 +26,7 @@
 ## 1. Non-goals
 
 - **不**把 `bp_fem_core` 拆成多个静态库 / DLL。单一静态库 + 抽象接口已经足够。多 lib 引入 ABI / `Types.hpp` 共享 / DLL 边界 / `/MD` vs `/MT` 一致性等额外负担，等真正出现第二个 binary 消费者再做。
-- **不**改 CLI 用户接口。所有现有 `--port-method analytic|tfe` / `--sweep direct|alps` / `--alps-krylov-order N` 行为字节级保留。
+- **不**改 CLI 用户接口。所有现有 `--port-method analytic|tfe` / `--sweep direct|alps` / `--alps-order N` 行为保持；旧 `--alps-krylov-order N` 仅作弃用别名。
 - **不**引入新外部依赖。只在 C++ 标准库范围内做接口化（`std::unique_ptr` / `std::function`）。
 
 ## 2. 目标架构
@@ -380,7 +380,7 @@ Step 2 与 Step 3 互不阻塞，可并行；Step 4 必须 Step 1 之后做。
 | `bp_fem_solver --port-method analytic` | 不变 | 无 |
 | `bp_fem_solver --port-method tfe --tfe-modes-per-port 5` | 不变 | 无 |
 | `bp_fem_solver --sweep direct` | 走 DirectSweep | 无 |
-| `bp_fem_solver --sweep alps --alps-krylov-order 30` | 走 AlpsSweep | 无 |
+| `bp_fem_solver --sweep alps --alps-order 12` | 走 AlpsSweep | 无 |
 | 新增 `--linear-solver bicgstab` | 强制 BiCGSTAB（即便有 MKL）| 新功能 |
 | 新增 `--precon jacobi` | 启用预条件 | 新功能 |
 | 老用户 default | PARDISO 直接、direct sweep、analytic 端口 | 与 main 字节一致 |

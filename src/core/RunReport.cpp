@@ -171,7 +171,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
         }
         add("sweepStrategy", s);
     }
-    add("alpsKrylovOrder", std::to_string(options.alpsKrylovOrder));
+    add("alpsOrder", std::to_string(options.alpsOrder));
     add("alpsExpansionFrequencyHz", std::to_string(options.alpsExpansionFrequencyHz));
     add("aweOrder", std::to_string(options.aweOrder));
     add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));
@@ -231,6 +231,26 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
       w.key("cwd");              w.value(report.workingDirectory);
       w.key("sweep_strategy");   w.value(report.sweepStrategyName);
       w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
+      w.key("offline_build_s"); w.value(report.offlineBuildSec);
+      w.key("port_linearization_s"); w.value(report.portLinearizationSec);
+      w.key("lanczos_operator_s"); w.value(report.lanczosOperatorSec);
+      w.key("pole_decomposition_s"); w.value(report.poleDecompositionSec);
+      w.key("orthogonalization_s"); w.value(report.orthogonalizationSec);
+      w.key("rom_projection_s"); w.value(report.romProjectionSec);
+      w.key("online_sweep_s"); w.value(report.onlineSweepSec);
+      w.key("symbolic_analysis_count");
+      w.value(static_cast<std::size_t>(report.symbolicAnalysisCount));
+      w.key("symbolic_analysis_s"); w.value(report.symbolicAnalysisSec);
+      w.key("numeric_factorization_count");
+      w.value(static_cast<std::size_t>(report.numericFactorizationCount));
+      w.key("numeric_factorization_s"); w.value(report.numericFactorizationSec);
+      w.key("factorized_rhs_solve_count");
+      w.value(static_cast<std::size_t>(report.factorizedRhsSolveCount));
+      w.key("factorized_rhs_solve_s"); w.value(report.factorizedRhsSolveSec);
+      w.key("factorized_solve_call_count");
+      w.value(static_cast<std::size_t>(report.factorizedSolveCallCount));
+      w.key("batch_rhs_max");
+      w.value(static_cast<std::size_t>(report.batchRhsMax));
 
       w.key("options");
       w.beginObject();
@@ -300,6 +320,26 @@ bool writeTimingReport(const std::filesystem::path& path, const RunReport& repor
       w.key("linear_solver");       w.value(optionValue(report, "linearSolver"));
       w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
       w.key("preconditioner");      w.value(optionValue(report, "preconditioner"));
+      w.key("offline_build_s");      w.value(report.offlineBuildSec);
+      w.key("port_linearization_s"); w.value(report.portLinearizationSec);
+      w.key("lanczos_operator_s");   w.value(report.lanczosOperatorSec);
+      w.key("pole_decomposition_s"); w.value(report.poleDecompositionSec);
+      w.key("orthogonalization_s");   w.value(report.orthogonalizationSec);
+      w.key("rom_projection_s");      w.value(report.romProjectionSec);
+      w.key("online_sweep_s");         w.value(report.onlineSweepSec);
+      w.key("symbolic_analysis_count");
+      w.value(static_cast<std::size_t>(report.symbolicAnalysisCount));
+      w.key("symbolic_analysis_s");    w.value(report.symbolicAnalysisSec);
+      w.key("numeric_factorization_count");
+      w.value(static_cast<std::size_t>(report.numericFactorizationCount));
+      w.key("numeric_factorization_s"); w.value(report.numericFactorizationSec);
+      w.key("factorized_rhs_solve_count");
+      w.value(static_cast<std::size_t>(report.factorizedRhsSolveCount));
+      w.key("factorized_rhs_solve_s"); w.value(report.factorizedRhsSolveSec);
+      w.key("factorized_solve_call_count");
+      w.value(static_cast<std::size_t>(report.factorizedSolveCallCount));
+      w.key("batch_rhs_max");
+      w.value(static_cast<std::size_t>(report.batchRhsMax));
       w.key("total_elapsed_s");     w.value(report.totalElapsedSec);
       w.key("peak_memory_mb");      w.value(report.peakMemoryMb);
       w.key("frequency_points");    w.value(report.sweep.size());
