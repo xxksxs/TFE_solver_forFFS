@@ -108,10 +108,10 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 如需把扫频时间从 N 次直接求解降到一次离线 + N 次廉价投影：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --sweep alps --alps-krylov-order 30 --no-write-all-fields
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 0 --sweep alps --alps-order 12 --no-write-all-fields
 ```
 
-该路径在 BP filter 基准上 101 频点扫频从 ~22 min 降到 ~104 s（加速 ~12×），与 `--sweep direct` 在所有频点的 S 参数偏差 < 1e-10。当前为 MVP 版本（单展开点 + 复对称 Galerkin + 仅 lossless 材料）；详见 `docs/optimization/alps-sweep/plan.md`。
+当前 ALPS 使用单展开点双边 Lanczos-Padé、P1 端口线性化和 PARDISO 分解复用，不再是早期复对称 Galerkin MVP。IOStructure 零阶 364932 DOF、101 点基准中，S11/S21 对 HFSS 的幅值相对 L2 误差约为 2.9%/0.62%；详见 `docs/optimization/alps-sweep/plan.md`。
 
 ## 快速扫频（AWE / GAWE / MGAWE / WCAWE）
 
@@ -148,7 +148,7 @@ VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶
 - WCAWE 会输出 `basis_condition.csv`，记录传统 AWE 矩基与 WCAWE 正交基的条件曲线。
 - 每次运行都会输出 `run.log`、`run.json`、`timing.json` 和 `diagnostics.json`，可用于和 direct / ALPS / AWE / GAWE / MGAWE / WCAWE 做时间、峰值内存、ROM 维度、deflation、正交性和无源性偏差对比。
 - WCAWE 额外输出 `basis_condition.csv`，其中包含传统 AWE 矩基条件代理、WCAWE 正交基条件代理、`R` 对角元和 `X≈VR` 重构误差。
-- HFSS 批量对比可使用 `scripts/compare_with_hfss.py "S Parameter Plot 1.csv" result/result_BENCHMARK --batch-root result`，脚本会扫描 `result/result_*` 中含 `s_parameters.csv` 的结果目录并输出 `benchmark_summary.csv`。
+- HFSS 批量对比可使用 `scripts/compare_with_hfss.py "wg_bp_filter_S_parameters.csv" result/result_BENCHMARK --batch-root result`，脚本会扫描 `result/result_*` 中含 `s_parameters.csv` 的结果目录并输出 `benchmark_summary.csv`。
 
 ## 端口建模选择（NPM / APM / TFE）
 

@@ -39,6 +39,12 @@ NGMesh 中 `body_name background` 对应 HFSS 背景网格。该背景体只用�
 
 faceId 是连接 AEDT 边界定义与 NGMesh 表面三角形的关键字段。
 
+HFSS 波端口既可以直接引用 Faces(...)，也可以引用单独的 sheet object。
+后一种写法由 AEDTParser 保留 objectId，再由 PortFaceResolver 使用 NGMesh
+body 包围盒与表面三角网格包围盒做唯一几何匹配，最终仍转换成 FEM 内核统一
+使用的 faceId。若没有匹配或出现多个重合面，解析阶段会直接报错，不会带着
+无效端口进入矩阵装配。
+
 必须满足：
 
 - AEDT 中定义的端口 faceId 能在 NGMesh 表面三角形中找到。

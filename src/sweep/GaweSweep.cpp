@@ -3,6 +3,7 @@
 #include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -53,13 +54,20 @@ SweepResult GaweSweep::run(const std::vector<double>& frequencies, const SweepCo
     linalg::SolverConfig solverCfg;
     solverCfg.maxIterations = ctx.linearMaxIterations;
     solverCfg.tolerance = ctx.linearTolerance;
+    const auto offlineStarted = std::chrono::steady_clock::now();
     const int dim = buildOffline(expansionHz, ctx.solver, solverCfg);
+    const double offlineBuildSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - offlineStarted).count();
     ctx.log.info("GAWE ROM dimension: " + std::to_string(dim));
     ctx.log.info("GAWE retained candidate columns: " + std::to_string(retainedColumns()));
     ctx.log.info("GAWE deflated candidate columns: " + std::to_string(deflatedColumns()));
 
     SweepResult out;
+    out.offlineBuildSec = offlineBuildSec;
+    out.orthogonalizationSec = delegate_.lastOrthogonalizationSec();
+    out.romProjectionSec = delegate_.lastRomProjectionSec();
     out.points.reserve(frequencies.size());
+    const auto onlineStarted = std::chrono::steady_clock::now();
     for (std::size_t i = 0; i < frequencies.size(); ++i) {
         const double f = frequencies[i];
         if (i == 0 || (i + 1) % 50 == 0 || i + 1 == frequencies.size()) {
@@ -70,6 +78,8 @@ SweepResult GaweSweep::run(const std::vector<double>& frequencies, const SweepCo
         out.points.push_back(evaluate(f));
         out.lastFrequencyHz = f;
     }
+    out.onlineSweepSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - onlineStarted).count();
     if (!frequencies.empty()) {
         out.lastEdgeDofs = reconstructField(frequencies.back());
     }

@@ -7,7 +7,7 @@ namespace fem {
 
 enum class SweepStrategy {
     Direct,  // legacy per-frequency direct solve
-    Alps,    // Adaptive Lanczos-Pade Sweep (single-point Krylov MOR for now)
+    Alps,    // Single-point two-sided Lanczos-Pade sweep
     Awe,     // Asymptotic Waveform Evaluation (single-point Padé MVP)
     Gawe,    // Galerkin AWE (single-point moment basis ROM)
     Mgawe,   // Multipoint Galerkin AWE (global reduced basis)
@@ -69,7 +69,7 @@ struct Options {
 
     // ALPS / fast-sweep options.
     SweepStrategy sweepStrategy = SweepStrategy::Direct;
-    int alpsKrylovOrder = 30;             // q per port; ROM dim ~ Np * q after deflation
+    int alpsOrder = 12;                     // scalar [q-1/q] Lanczos-Padé order
     double alpsExpansionFrequencyHz = 0.0;  // 0 means "use band center"
     int aweOrder = 8;                       // q for [q-1/q] Padé
     double aweExpansionFrequencyHz = 0.0;   // 0 means "use band center"

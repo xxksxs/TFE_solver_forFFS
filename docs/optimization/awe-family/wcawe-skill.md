@@ -1,64 +1,93 @@
-# WCAWE Skill：良条件 AWE
+# WCAWE Skill：论文一致的良条件 AWE
 
-## 适用目标
+## 权威文档
 
-WCAWE（Well-Conditioned Asymptotic Waveform Evaluation）用于解决传统 AWE 矩向量病态的问题。
-它直接处理 FEM 产生的多项式矩阵方程，不需要通过线性化引入额外未知量，也避免了传统 AWE 高阶矩
-条件数快速恶化。
+- [中文数学推导 LaTeX](wcawe-theory-cn.tex)
+- [中文数学推导 PDF](wcawe-theory-cn.pdf)
+- [C++ 代码实现规范](wcawe-implementation-skill.md)
+- 论文：R. D. Slone, R. Lee, J.-F. Lee, Well-conditioned asymptotic waveform evaluation for finite elements, IEEE TAP, 2003, DOI 10.1109/TAP.2003.816321。
 
-WCAWE 的核心不是外部频段偏好策略，而是用非奇异上三角系数矩阵把 AWE 矩向量组合成良条件基。
-当该系数矩阵取单位阵时，WCAWE 退化为传统 AWE；当该系数矩阵取 modified Gram-Schmidt 的
-正交化系数时，WCAWE 得到稳定的 Arnoldi-like 基。
+LaTeX/PDF 是数学定义和代码验收的权威版本；本文件是工程入口。
 
-## 输入
+在本机进入该目录后，使用以下 MiKTeX XeLaTeX 命令运行两次，可重建目录、引用和 PDF：
 
-- `polynomialModel`：多项式矩阵方程 `A(t)x(t)=b(t)`，含 `A_0...A_d` 和 `b_0...b_d`。
-- `expansionPoint`：展开波数/频率，初版使用单点；多点版本可复用 MGAWE 的展开点管理。
-- `order`：目标 WCAWE 基阶数。
-- `aweRecurrence`：传统 AWE 系统矩递推接口，用于定义矩匹配目标。
-- `orthogonalizer`：modified Gram-Schmidt + reorthogonalization。
-- `triangularConfig`：上三角系数矩阵 `R` 的构造、存储和奇异性阈值。
-- `projectionConfig`：用良条件基构造 Galerkin reduced model 的投影约定。
+```powershell
+$xelatex = 'C:\Users\30297\AppData\Local\Programs\MiKTeX\miktex\bin\x64\xelatex.exe'
+& $xelatex -interaction=nonstopmode -halt-on-error wcawe-theory-cn.tex
+& $xelatex -interaction=nonstopmode -halt-on-error wcawe-theory-cn.tex
+```
 
-## 输出
+其他机器若已将 XeLaTeX 加入 `PATH`，可直接把 `$xelatex` 替换为 `xelatex`。
 
-- `wellConditionedBasis V`：良条件正交/近正交基。
-- `triangularCoefficients R`：连接传统 AWE 矩向量和 WCAWE 基的非奇异上三角矩阵。
-- `correctionTerms`：WCAWE 递推中的校正项与每阶来源记录。
-- `reducedModel`：投影后的 Galerkin 降阶模型。
-- `conditionCurves`：传统 AWE 矩基与 WCAWE 基的条件数随阶数变化曲线。
-- `diagnostics`：正交性、矩匹配保持性、direct 抽检误差和无额外未知量检查结果。
+## 核心结论
 
-## 算法步骤
+WCAWE 直接处理展开点附近的多项式系统
 
-1. 用 `PolynomialMomentRecurrence` 定义传统 AWE 矩序列 `{x_0, x_1, ...}` 的目标递推。
-2. 初始化 WCAWE 候选向量，使其张成与对应 AWE 矩相同的子空间。
-3. 对每一阶候选向量执行 modified Gram-Schmidt，得到新的基向量和上三角系数。
-4. 根据已生成的上三角系数矩阵 `R` 构造 WCAWE 校正项，使新基仍保持 AWE 的矩匹配性质。
-5. 检查 `R` 的对角元和条件数；若接近奇异，停止增加阶数并报告饱和。
-6. 用良条件基 `V` 构造 Galerkin reduced model。
-7. 在线扫频时求解小系统并输出 S 参数；需要场时使用 `x_hat=V x_r`。
-8. 输出 AWE 原始矩基与 WCAWE 基的条件数曲线，证明良条件化确实发生。
+$$
+\left(\sum_{i=0}^{d_A}\sigma^i A_i\right)x(s)
+=\sum_{k=0}^{d_b}\sigma^k b_k,\qquad \sigma=s-s_0.
+$$
 
-## 实现建议
+它不对多项式系统做扩维线性化。真正的 WCAWE 也不是先生成完整传统 AWE 矩再做 QR，而是在生成第 n 个候选向量时，使用已经形成的正交基 V 和上三角矩阵 U 构造校正项。
 
-- `WellConditionedBasisBuilder` 应同时保存 `V` 和 `R`，因为可靠性诊断需要二者。
-- WCAWE 的递推必须显式调用传统 AWE 矩目标，不能只做普通 Krylov 正交化后宣称等价。
-- 初版不需要 Padé；WCAWE 更适合作为 Galerkin reduced model 的稳定基生成器。
-- 多点 WCAWE 可以后续作为 MGAWE 的局部向量生成器，不在第一版文档实现范围内。
+论文的三个核心关系是：
 
-## 风险点
+1. 候选矩阵、正交基与上三角矩阵满足 V_n = Vtilde_n U_n^{-1}。
+2. 校正项 P_Uw(n,m) 是 U 的连续主子块逆的有序乘积。
+3. 第 n 阶候选向量必须按论文式 (7) 读取 U_{n-1} 和 V_{n-1}，随后用 MGS 更新 U 的第 n 列。
 
-- 若只正交化 AWE 矩向量而不加入 WCAWE 校正项，会破坏论文中的矩匹配性质。
-- `R` 接近奇异时继续增阶会制造虚假精度。
-- WCAWE 比传统 AWE 构造稍贵，但应通过减少病态和减少无效高阶向量来换取整体可靠性。
-- 当前项目的端口 `beta(omega)` 非多项式，需要先在展开点局部多项式化或通过仿射导数接口处理。
+当 U=I 时，校正递推退化为传统 AWE；论文实际选择 MGS 系数作为 U。W 表示 well-conditioned，不是频率权重或端口权重。
+
+## 禁止实现
+
+以下路径不能宣称为 Slone 2003 WCAWE：
+
+- 先完整生成传统 AWE 矩，再统一做 QR/MGS。
+- 在传统递推中直接使用归一化历史向量，却没有 U 子块逆乘积校正。
+- 只用 X≈VR、cond(V)≈1 或基正交性作为论文一致性证明。
+- 将 MGS 的 Hermitian 内积与论文复对称 Galerkin 的 transpose 投影混为同一运算。
+
+## 模块输入
+
+- 多项式矩阵系数 A_0...A_dA，按同一 σ 约定构造。
+- 激励系数 b_0...b_db，包含频变端口激励导数。
+- 展开点 s_0 和目标阶数 q。
+- 支持 A_0 一次分解、多 RHS 回代的稀疏求解器。
+- MGS、再正交和 breakdown 阈值。
+- 明确的复对称 Galerkin 投影约定及端口观测接口。
+
+## 模块输出
+
+- 良条件基 V_q，列长度保持为原 FEM DOF。
+- 论文式 (8) 的上三角矩阵 U_q。
+- 每阶 P_U1/P_U2 三角回代和校正来源记录。
+- 投影后的多项式 reduced model。
+- 复数 S11/S21 和按需场重构。
+- 式 (7) 递推残差、式 (8) 关系残差、正交性、矩匹配、条件数、时间和峰值内存诊断。
+
+## 推荐模块边界
+
+- PolynomialWcaweRecurrence：按论文式 (7)–(9)逐阶生成候选向量。
+- UpperTriangularBlockAction：以三角回代计算校正乘积作用，禁止显式求逆。
+- WellConditionedBasisBuilder：执行 MGS、再正交、U 更新和 breakdown。
+- GalerkinReducedModel：统一投影、在线求解、S 参数和场重构。
+- WcaweDiagnostics：记录论文关系残差和性能数据。
+
+## 当前代码审计结论
+
+当前 `WcaweSweep` 已不再调用 `generateLosslessMoments()` 或保存完整传统 AWE 矩。它通过 `PolynomialWcaweRecurrence` 逐阶组装论文式 (7)，用 `UpperTriangularBlockAction` 对式 (9) 的连续主子块执行逆序三角回代，并在每次 MGS 后立即把系数写入固定步长 `U`，供下一阶候选使用。
+
+当前实现已通过非单位复杂 `U` 的乘积顺序、`U=I` 退化、式 (7)、式 (8)、矩子空间匹配、朴素归一化递推反例和 breakdown 停止测试，可以标记为论文一致的单展开点 P1 WCAWE。当前限制仍是无损材料、P1 端口色散和单展开点；在线阶段使用精确投影后的 K/M/端口频率律，属于论文基上的工程扩展。
+
+30 万四面体网格、90–100 GHz、101 点、q=12、numerical port 的工程结果为：S11/S21 对 HFSS 幅值相对 L2 约 0.774%/0.990%，95 GHz 复数 direct 相对误差约 7.9e-13/9.2e-14，1 次数值分解和 12 次回代。q=20/30/40 均保持递推与正交稳定，但宽带误差没有单调改善，因此该算例尚不足以宣称 WCAWE 相对 GAWE/MGAWE 有精度优势。
 
 ## 可靠性验证
 
-- **条件数对比**：输出传统 AWE 矩基和 WCAWE 基的 `cond(V_n)` 曲线，WCAWE 应明显更稳定。
-- **MGS 正交性**：检查 `||V^T V-I||` 或当前 bilinear 内积下的等价指标。
-- **矩匹配保持性**：小系统上验证 WCAWE reduced model 与传统 AWE 匹配同阶矩。
-- **Arnoldi 对照**：在线性化的小型多项式系统上，WCAWE 结果应接近 Arnoldi，但不增加全空间未知量。
-- **无额外未知量检查**：诊断中记录 WCAWE 基向量长度仍为原 FEM DOF，不使用线性化扩维系统。
-- **宽带 direct FEM 对比**：在 BP filter 抽检点上比较 direct，目标同 MGAWE：`max delta <= 0.05 dB`。
+- U=I 退化测试：逐列恢复传统 AWE，误差不高于 1e-12。
+- Vtilde≈VU：Frobenius 相对误差不高于 1e-12。
+- 式 (7) 递推残差不高于 1e-11。
+- V^H V≈I：正交误差不高于 1e-11。
+- 小型多项式系统至少前 q 个系统矩相对误差不高于 1e-10。
+- 必须包含一个能区分论文 WCAWE 与无校正朴素递推的反例。
+- 基向量不得扩维；复对称 T 投影与 Hermitian H 投影必须分别验证。
+- 工程验收比较 direct FEM 与 HFSS `IOStructure_S_parameters.csv` 的复数 S11/S21，以相对 L2 误差为主，深零点另报绝对幅值误差。

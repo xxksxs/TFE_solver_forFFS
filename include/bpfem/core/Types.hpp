@@ -30,6 +30,8 @@ struct PortDefinition {
     bool excited = false;
     double magnitudeW = 0.0;
     double phaseDeg = 0.0;
+    // HFSS 允许把波端口绑定到 sheet object；解析网格后再由其几何范围解析 faceId。
+    int objectId = -1;
 };
 
 struct SweepDefinition {
@@ -52,6 +54,9 @@ struct BodyInfo {
     std::string name;
     int volumeElementCount = 0;
     std::vector<int> faceIds;
+    Vec3 boundsMin;
+    Vec3 boundsMax;
+    bool hasBounds = false;
 };
 
 struct SurfaceTriangle {

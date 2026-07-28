@@ -12,36 +12,61 @@ PolynomialMomentRecurrence::generatePolynomialMoments(
     const std::vector<LinearOperator>& matrixCoefficientOperators,
     const SolveFunction& solveAtExpansion) {
     if (rhsCoefficients.empty()) {
-        throw std::runtime_error("PolynomialMomentRecurrence: at least one RHS coefficient is required");
+        throw std::runtime_error(
+            "PolynomialMomentRecurrence: at least one RHS coefficient is required");
     }
-    const std::size_t n = rhsCoefficients.front().size();
-    if (n == 0) {
-        throw std::runtime_error("PolynomialMomentRecurrence: RHS coefficient vectors must be non-empty");
-    }
-    for (const auto& rhs : rhsCoefficients) {
-        if (rhs.size() != n) {
-            throw std::runtime_error("PolynomialMomentRecurrence: inconsistent RHS coefficient size");
-        }
+    return generatePolynomialMoments(
+        rhsCoefficients.size(),
+        [&rhsCoefficients](std::size_t order) { return rhsCoefficients[order]; },
+        matrixCoefficientOperators,
+        solveAtExpansion);
+}
+
+// 按阶生成 RHS，并对一般多项式矩阵方程执行矩递推。
+std::vector<std::vector<PolynomialMomentRecurrence::Complex>>
+PolynomialMomentRecurrence::generatePolynomialMoments(
+    std::size_t momentCount,
+    const RhsCoefficientFunction& rhsCoefficientAt,
+    const std::vector<LinearOperator>& matrixCoefficientOperators,
+    const SolveFunction& solveAtExpansion) {
+    if (momentCount == 0) {
+        throw std::runtime_error(
+            "PolynomialMomentRecurrence: at least one moment is required");
     }
 
     std::vector<std::vector<Complex>> moments;
-    moments.reserve(rhsCoefficients.size());
-    for (std::size_t j = 0; j < rhsCoefficients.size(); ++j) {
-        std::vector<Complex> rhs = rhsCoefficients[j];
+    moments.reserve(momentCount);
+    std::size_t dimension = 0;
+    for (std::size_t j = 0; j < momentCount; ++j) {
+        std::vector<Complex> rhs = rhsCoefficientAt(j);
+        if (j == 0) {
+            dimension = rhs.size();
+            if (dimension == 0) {
+                throw std::runtime_error(
+                    "PolynomialMomentRecurrence: RHS coefficient vectors must be non-empty");
+            }
+        } else if (rhs.size() != dimension) {
+            throw std::runtime_error(
+                "PolynomialMomentRecurrence: inconsistent RHS coefficient size");
+        }
+
         const std::size_t maxCoeff = std::min(j, matrixCoefficientOperators.size());
         for (std::size_t r = 1; r <= maxCoeff; ++r) {
             const std::vector<Complex> applied =
                 matrixCoefficientOperators[r - 1](moments[j - r]);
-            if (applied.size() != n) {
-                throw std::runtime_error("PolynomialMomentRecurrence: matrix coefficient returned the wrong size");
+            if (applied.size() != dimension) {
+                throw std::runtime_error(
+                    "PolynomialMomentRecurrence: matrix coefficient returned the wrong size");
             }
-            for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t i = 0; i < dimension; ++i) {
                 rhs[i] -= applied[i];
             }
         }
+
         std::vector<Complex> x = solveAtExpansion(rhs);
-        if (x.size() != n) {
-            throw std::runtime_error("PolynomialMomentRecurrence: solver returned a vector with the wrong size");
+        if (x.size() != dimension) {
+            throw std::runtime_error(
+                "PolynomialMomentRecurrence: solver returned a vector with the wrong size");
         }
         moments.push_back(std::move(x));
     }

@@ -100,6 +100,8 @@ Mesh NGMeshParser::parse(const std::filesystem::path& path) const {
 
     Mesh mesh;
     std::string line;
+    int currentBodyId = -1;
+    unsigned currentBodyBoundsMask = 0;
     int currentFacetId = -1;
     while (std::getline(in, line)) {
         line = trim(line);
@@ -117,7 +119,19 @@ Mesh NGMeshParser::parse(const std::filesystem::path& path) const {
             ss >> key >> mesh.userUnitsPerMeter;
         } else if (line.rfind("body_id", 0) == 0) {
             parseBody(line, mesh);
+            std::istringstream ss(line);
+            std::string key;
+            ss >> key >> currentBodyId;
+            currentBodyBoundsMask = 0;
+        } else if (line.rfind("face_ids", 0) == 0 && currentBodyId >= 0) {
+            parseBodyFaceIds(line, currentBodyId, mesh);
+        } else if (line.rfind("bbox_", 0) == 0 && currentBodyId >= 0) {
+            currentBodyBoundsMask |= parseBodyBound(line, currentBodyId, mesh);
+            if (currentBodyBoundsMask == 0x3FU) {
+                mesh.bodies[currentBodyId].hasBounds = true;
+            }
         } else if (line.rfind("pid", 0) == 0) {
+            currentBodyId = -1;
             parsePoint(line, mesh);
         } else if (line.rfind("facet_id", 0) == 0) {
             currentFacetId = parseFacet(line, mesh);
@@ -152,6 +166,58 @@ void NGMeshParser::parseBody(const std::string& line, Mesh& mesh) {
     if (body.id >= 0) {
         mesh.bodies[body.id] = body;
     }
+}
+
+void NGMeshParser::parseBodyFaceIds(const std::string& line, int bodyId, Mesh& mesh) {
+    const auto bodyIt = mesh.bodies.find(bodyId);
+    if (bodyIt == mesh.bodies.end()) {
+        return;
+    }
+
+    std::istringstream ss(line);
+    std::string key;
+    ss >> key;
+    int faceId = -1;
+    while (ss >> faceId) {
+        bodyIt->second.faceIds.push_back(faceId);
+    }
+}
+
+unsigned NGMeshParser::parseBodyBound(const std::string& line, int bodyId, Mesh& mesh) {
+    const auto bodyIt = mesh.bodies.find(bodyId);
+    if (bodyIt == mesh.bodies.end()) {
+        return 0;
+    }
+
+    std::istringstream ss(line);
+    std::string key;
+    double value = 0.0;
+    ss >> key >> value;
+    if (key == "bbox_xmin") {
+        bodyIt->second.boundsMin.x = value;
+        return 1U << 0U;
+    }
+    if (key == "bbox_ymin") {
+        bodyIt->second.boundsMin.y = value;
+        return 1U << 1U;
+    }
+    if (key == "bbox_zmin") {
+        bodyIt->second.boundsMin.z = value;
+        return 1U << 2U;
+    }
+    if (key == "bbox_xmax") {
+        bodyIt->second.boundsMax.x = value;
+        return 1U << 3U;
+    }
+    if (key == "bbox_ymax") {
+        bodyIt->second.boundsMax.y = value;
+        return 1U << 4U;
+    }
+    if (key == "bbox_zmax") {
+        bodyIt->second.boundsMax.z = value;
+        return 1U << 5U;
+    }
+    return 0;
 }
 
 void NGMeshParser::parsePoint(const std::string& line, Mesh& mesh) {

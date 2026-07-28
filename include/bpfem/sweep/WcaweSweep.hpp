@@ -2,7 +2,7 @@
 
 #include "bpfem/core/Types.hpp"
 #include "bpfem/fastsweep/GalerkinReducedModel.hpp"
-#include "bpfem/fastsweep/WellConditionedBasisBuilder.hpp"
+#include "bpfem/fastsweep/PolynomialWcaweRecurrence.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
@@ -16,14 +16,13 @@
 namespace fem::sweep {
 
 struct WcaweOptions {
-    // Target basis size. The builder may stop earlier if MGS detects a
-    // near-dependent moment direction.
+    // 论文 WCAWE 单展开点递推的目标基阶数。
     int order = 12;
 
-    // Expansion frequency in Hz. 0 means "use band center".
+    // 展开频率，单位 Hz；取 0 时使用扫频带中心。
     double expansionFrequencyHz = 0.0;
 
-    // Deflation threshold for the MGS residual / R diagonal.
+    // U 对角元和 MGS 后残差的相对 breakdown 阈值。
     double dropTolerance = 1.0e-12;
 };
 
@@ -37,44 +36,37 @@ public:
                const PortModeSolver& portModeSolver,
                WcaweOptions options = {});
 
-    // 执行完整 WCAWE 扫频流程，并返回所有频点的 S 参数。
+    // 执行论文一致的 WCAWE 离线构建、在线扫频和诊断输出。
     SweepResult run(const std::vector<double>& frequencies,
                     const SweepContext& ctx) override;
 
     // 返回命令行和诊断文件使用的算法名。
     const char* name() const override { return "wcawe"; }
 
-    // 离线阶段：生成良条件基并构建 Galerkin ROM。
+    // 使用 P1 多项式模型逐阶生成 WCAWE 基并构建 Galerkin ROM。
     int buildOffline(double expansionFrequencyHz,
                      linalg::ISparseSolver& solver,
                      const linalg::SolverConfig& solverConfig);
 
-    // 在线阶段：评估指定频率的 S 参数。
+    // 在线阶段评估指定频率的 S 参数。
     SParameterPoint evaluate(double frequencyHz) const;
 
-    // 在线阶段：重构指定频率的全阶场。
+    // 在线阶段重构指定频率的全阶场。
     std::vector<Complex> reconstructField(double frequencyHz) const;
 
     // 返回当前 ROM 维度。
     int dimension() const { return romDim_; }
 
-    // 返回离线正交化中丢弃的候选列数。
+    // 返回因 breakdown 未生成的目标列数量。
     int deflatedColumns() const { return deflatedColumns_; }
 
     // 返回 WCAWE 离线阶段是否已经完成。
     bool ready() const { return ready_; }
 
-    // 写出 WCAWE 条件数诊断 CSV。
+    // 写出每阶 U 对角、递推残差和正交性诊断 CSV。
     bool writeBasisConditionCsv(const std::filesystem::path& path) const;
 
 private:
-    // 生成传统 AWE 矩向量，随后由 WellConditionedBasisBuilder 变换为良条件基。
-    std::vector<std::vector<Complex>> buildAweMoments(
-        double expansionFrequencyHz,
-        linalg::ISparseSolver& solver,
-        const linalg::SolverConfig& solverConfig,
-        const std::vector<std::vector<Complex>>& portVectors) const;
-
     // 求解指定频率的 reduced 坐标。
     std::vector<Complex> solveReduced(double frequencyHz) const;
 
@@ -90,9 +82,11 @@ private:
     int numVirtualPorts_ = 0;
     int deflatedColumns_ = 0;
     double expansionFrequencyHz_ = 0.0;
+    double orthogonalizationSec_ = 0.0;
+    double romProjectionSec_ = 0.0;
 
     FEMAssembler::AffineSystem affine_;
-    fastsweep::WellConditionedBasisBuilder basisBuilder_;
+    fastsweep::WcaweBuildResult wcaweBuild_;
     fastsweep::GalerkinReducedModel model_;
 };
 

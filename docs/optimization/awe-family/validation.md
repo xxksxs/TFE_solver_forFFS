@@ -3,9 +3,11 @@
 任何快速扫频算法进入实现前后，都必须同时通过数学单测、论文一致性检查、项目集成测试、HFSS 基准对比和失效诊断。
 本文件定义校验口径；其中 HFSS 文件是 BP filter 的外部物理基准，direct FEM 结果是工程回归和定位问题用的内部基准。
 
+WCAWE 的论文递推、接口和硬阈值以 [WCAWE 代码实现规范](wcawe-implementation-skill.md) 为准；本文件的通用条款不得覆盖该规范。
+
 ## 0. BP Filter 外部基准
 
-BP filter 的首要校验文件为项目根目录下的 `S Parameter Plot 1.csv`，该文件来自 HFSS：
+BP filter 的首要校验文件为项目根目录下的 `wg_bp_filter_S_parameters.csv`，该文件来自 HFSS：
 
 - 频率列：`Freq [GHz]`。
 - 反射幅度列：`mag(S(1,1)) []`。
@@ -33,7 +35,8 @@ BP filter 的默认工程目标：
 
 - direct FEM 对 HFSS：全频带 `max |abs_err| <= 2e-2`，且通带附近 `max |db_err| <= 0.2 dB`。
 - AWE 单展开点：展开点必须与 HFSS/direct 同阶吻合；窄带内按 3.1 验收。
-- GAWE/MGAWE/WCAWE 或自适应多点 AWE：40--43 GHz 全带按 3.2/3.3 验收。
+- GAWE/MGAWE 或自适应多点 AWE：旧 BP filter 的 40--43 GHz 全带按 3.2 验收。
+- WCAWE：当前 IOStructure 的 90--100 GHz、`IOStructure_S_parameters.csv` 按 3.3 验收。
 
 ## 1. 数学单测
 
@@ -70,20 +73,24 @@ BP filter 的默认工程目标：
 - full matrix 复对称时，reduced matrix 保持同一投影约定下的复对称。
 - reduced residual 在 `span(V)` 内正交：`V^T(A V x_r - b) ≈ 0`。
 
-### 1.4 WCAWE 良条件性
+### 1.4 WCAWE 论文递推
 
-构造传统 AWE 矩基 `X_n=[x0,...,xn]` 和 WCAWE 基 `V_n`。
+构造 dA=2、db=2 的小型复多项式系统，直接验证论文式 (7)–(9)：
 
-要求：
+- 强制 U=I 时逐列恢复传统 AWE 矩，相对误差不高于 1e-12。
+- 候选与基满足 Vtilde_n≈V_n*U_n，相对 Frobenius 误差不高于 1e-12。
+- 论文式 (7) 的逐阶递推残差不高于 1e-11。
+- Hermitian MGS 正交误差不高于 1e-11。
+- reduced model 至少匹配前 q 个系统矩，相对误差不高于 1e-10。
+- 必须包含一个能区分真正 WCAWE 与论文错误式 (6) 的反例。
+- U 接近奇异时必须终止单点递推；不得跳过失败列继续生成下一阶。
+- 基向量长度保持为原 FEM DOF，不允许通过线性化扩维。
 
-- WCAWE 保存非奇异上三角系数矩阵 `R_n`，并满足 `X_n ≈ V_n R_n` 或实现约定的等价关系。
-- `cond(V_n)` 明显低于 `cond(X_n)`，并随阶数增长保持可解释。
-- `R_n` 对角元不得接近零；若接近奇异，算法必须停止增阶并报告。
-- 小型线性化系统上，WCAWE 结果应接近 Arnoldi 对照，但不得增加全空间未知量。
+X≈VR 只能作为普通 QR 诊断，不能替代式 (7)、式 (8) 和矩匹配验收。
 
 ## 2. 工程烟测
 
-先生成 direct 内部基准，并用 `S Parameter Plot 1.csv` 做 HFSS 外部基准对比：
+通用旧 BP filter 烟测先生成 direct 内部基准，并用 `wg_bp_filter_S_parameters.csv` 做 HFSS 外部基准对比；WCAWE 当前工程改用第 3.3 节的 `IOStructure_S_parameters.csv`：
 
 ```powershell
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep direct --no-write-all-fields --out result
@@ -92,7 +99,7 @@ BP filter 的默认工程目标：
 现有 ALPS 对照：
 
 ```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep alps --alps-order 12 --no-write-all-fields --out result
 ```
 
 未来新增算法后的目标命令示例：
@@ -101,7 +108,7 @@ BP filter 的默认工程目标：
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep awe --awe-order 8 --no-write-all-fields --out result
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep gawe --gawe-order 12 --no-write-all-fields --out result
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep mgawe --mgawe-points 3 --mgawe-order 20 --no-write-all-fields --out result
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --sweep wcawe --wcawe-order 30 --no-write-all-fields --out result
+.\build_pardiso\Release\bp_fem_solver.exe --basis-order 0 --max-sweep-points 5 --sweep wcawe --wcawe-order 12 --linear-solver direct --no-write-all-fields --out result
 ```
 
 ## 3. 精度验收
@@ -123,11 +130,25 @@ BP filter 的默认工程目标：
 
 ### 3.3 WCAWE 良条件宽带
 
-- 与传统 AWE 使用相同展开点和阶数预算。
-- `basis_condition.csv` 中必须同时记录 AWE 矩基和 WCAWE 基的条件数曲线。
-- WCAWE 的条件数曲线应显著优于传统 AWE；若没有改善，必须标记算法失效。
-- 小型线性化对照中，WCAWE 结果应接近 Arnoldi；大型 FEM 中，WCAWE 不得引入额外未知量。
-- BP filter 相对 HFSS CSV 的抽检阈值同 MGAWE：`max delta |S11|, |S21| <= 0.05 dB`。
+论文一致性首先按 1.4 和 [代码实现规范](wcawe-implementation-skill.md) 验收。当前大型工程基准固定为：
+
+- 零阶 current.ngmesh，290856 个四面体、364932 个边未知量。
+- 90–100 GHz，101 点，中心展开点 95 GHz。
+- PARDISO Release，wcawe-order=12。
+- HFSS 外部参考为 `IOStructure_S_parameters.csv`，只比较 S11/S21。
+- 主指标使用幅值相对 L2；深零点额外报告绝对幅值误差。
+
+最低门槛：
+
+- 95 GHz 展开点相对 direct 的复数 S11/S21 误差不高于 1e-10。
+- HFSS S11 幅值相对 L2 不高于 1.0%。
+- HFSS S21 幅值相对 L2 不高于 1.2%。
+- q=12 时 1 次数值分解、12 个 RHS、12 次依赖串行回代。
+- 峰值内存不超过当前 GAWE/WCAWE 基线的 105%。
+
+另做 q={12,20,30,40} 高阶压力测试。只有在更晚停滞、更低高阶误差或以更少有效列达到同精度至少一项成立时，才宣称 WCAWE 相对 GAWE/AWE 有优势。
+
+2026-07-28 实测：q=12、numerical port 的 HFSS S11/S21 幅值相对 L2 为 0.774%/0.990%，95 GHz 复数 direct 相对误差为 7.9e-13/9.2e-14，峰值内存 2900.7 MB，1 次数值分解和 12 次回代。q=20/30/40 均达到目标阶数且正交误差小于 5e-14，但宽带误差未单调改善，因此当前算例只证明高阶递推稳定，不声明相对 GAWE/MGAWE 的精度优势。
 
 ## 4. 残差和物理检查
 
@@ -159,10 +180,10 @@ BP filter 的默认工程目标：
 每次算法变更至少保存：
 
 - `s_parameters.csv`：S 参数结果。
-- `hfss_comparison.csv`：与 `S Parameter Plot 1.csv` 对齐后的外部基准误差。
-- `diagnostics.json`：算法参数、展开点、阶数、ROM 维度、retained/deflated 列数、Padé pivot ratio、WCAWE `X≈VR` 重构误差、正交性、无源性最大偏差、reduced solve 状态。
+- `hfss_comparison.csv`：与 `wg_bp_filter_S_parameters.csv` 对齐后的外部基准误差。
+- `diagnostics.json`：算法参数、展开点、阶数、ROM 维度、retained/deflated 列数、Padé pivot ratio、WCAWE 式 (7) 递推残差、式 (8) 关系残差、U 对角、正交性、矩匹配、无源性和 reduced solve 状态。
 - `timing.json`：offline、basis、projection、online 的耗时。
-- `basis_condition.csv`：WCAWE 基条件数诊断；必须包含 AWE 矩基条件代理、WCAWE 正交基条件代理、`R` 对角元、正交性误差和 `X≈VR` 重构误差。
+- `basis_condition.csv`：WCAWE 基条件数诊断；必须包含 AWE 矩基条件代理、WCAWE 正交基条件代理、U 对角元、递推残差、基关系残差和正交性误差。
 - `benchmark_summary.csv`：`scripts/compare_with_hfss.py --batch-root` 生成的 direct/ALPS/AWE/GAWE/MGAWE/WCAWE 批量 HFSS 对比汇总。
 - `direct_comparison.csv`：direct 抽检频点上的幅度误差、相位误差和残差。
 

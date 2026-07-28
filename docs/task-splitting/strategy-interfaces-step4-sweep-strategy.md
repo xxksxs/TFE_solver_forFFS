@@ -76,7 +76,7 @@ cmake --build build_mkl --config Release
 .\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 5 --basis-order 1 --no-write-all-fields --out result
 
 # ALPS 101 频点 (TFE-5 multi-mode)
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out result
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-order 12 --no-write-all-fields --out result
 
 # direct 单频点 (TFE-5)
 .\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep direct --no-write-all-fields --out result

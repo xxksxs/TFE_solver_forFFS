@@ -88,7 +88,7 @@ cmake --build build_mkl --config Release
 .\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 5 --basis-order 1 --no-write-all-fields --out result
 
 # 101 频点 ALPS（TFE multi-mode 走 affine 路径）
-.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-krylov-order 30 --no-write-all-fields --out result
+.\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 101 --basis-order 1 --port-method tfe --tfe-modes-per-port 5 --sweep alps --alps-order 12 --no-write-all-fields --out result
 
 # APM 单频点对照
 .\build_mkl\Release\bp_fem_solver.exe --max-sweep-points 1 --basis-order 1 --port-method analytic --no-write-all-fields --out result

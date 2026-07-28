@@ -30,16 +30,20 @@ add_library(bp_fem_core STATIC
     src/fastsweep/FastSweepDiagnostics.cpp
     src/fastsweep/GalerkinReducedModel.cpp
     src/fastsweep/LinearAlgebra.cpp
+    src/fastsweep/LanczosPadeModel.cpp
     src/fastsweep/PadeApproximant.cpp
     src/fastsweep/PolynomialMomentRecurrence.cpp
     src/fastsweep/PolynomialPortMomentBuilder.cpp
+    src/fastsweep/PolynomialWcaweRecurrence.cpp
     src/fastsweep/PortModeUtilities.cpp
+    src/fastsweep/UpperTriangularBlockAction.cpp
     src/fastsweep/WellConditionedBasisBuilder.cpp
     src/fem/EdgeTopology.cpp
     src/fem/FEMAssembler.cpp
     src/fem/PortModeSolver.cpp
     src/io/AEDTParser.cpp
     src/io/NGMeshParser.cpp
+    src/io/PortFaceResolver.cpp
     src/linalg/BiCGStabBackend.cpp
     src/linalg/BiCGStabSolver.cpp
     src/linalg/GmresBackend.cpp
@@ -86,6 +90,9 @@ enable_testing()
 add_executable(fastsweep_tests tests/fastsweep_tests.cpp)
 target_link_libraries(fastsweep_tests PRIVATE bp_fem_core)
 add_test(NAME fastsweep_tests COMMAND fastsweep_tests)
+add_executable(io_parser_tests tests/io_parser_tests.cpp)
+target_link_libraries(io_parser_tests PRIVATE bp_fem_core)
+add_test(NAME io_parser_tests COMMAND io_parser_tests)
 
 # Logger uses GetProcessMemoryInfo (Psapi) on Windows for the working-set /
 # peak-memory counters in the run summary. Link the import library that
@@ -99,8 +106,10 @@ if(MSVC)
     target_compile_options(bp_fem_core PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(bp_fem_solver PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(fastsweep_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_compile_options(io_parser_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
 else()
     target_compile_options(bp_fem_core PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(bp_fem_solver PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(fastsweep_tests PRIVATE -Wall -Wextra -pedantic)
+    target_compile_options(io_parser_tests PRIVATE -Wall -Wextra -pedantic)
 endif()

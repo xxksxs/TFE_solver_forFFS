@@ -2,6 +2,7 @@
 
 #include "bpfem/core/Types.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -60,6 +61,23 @@ struct RunReport {
 
     double totalElapsedSec = 0.0;
     double peakMemoryMb = 0.0;
+
+    double offlineBuildSec = 0.0;
+    double portLinearizationSec = 0.0;
+    double lanczosOperatorSec = 0.0;
+    double poleDecompositionSec = 0.0;
+    double orthogonalizationSec = 0.0;
+    double romProjectionSec = 0.0;
+    double onlineSweepSec = 0.0;
+
+    std::uint64_t symbolicAnalysisCount = 0;
+    std::uint64_t numericFactorizationCount = 0;
+    std::uint64_t factorizedRhsSolveCount = 0;
+    std::uint64_t factorizedSolveCallCount = 0;
+    std::uint64_t batchRhsMax = 0;
+    double symbolicAnalysisSec = 0.0;
+    double numericFactorizationSec = 0.0;
+    double factorizedRhsSolveSec = 0.0;
 };
 
 // Populate the report's environment / options sections from a captured

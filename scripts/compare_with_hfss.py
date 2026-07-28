@@ -1,6 +1,6 @@
 """Compare bp_fem_solver S-parameter outputs with the HFSS TFE reference.
 
-The HFSS reference file `S Parameter Plot 1.csv` carries:
+The HFSS reference file `wg_bp_filter_S_parameters.csv` carries:
     "Freq [GHz]","mag(S(1,1)) []","mag(S(2,1)) []"
 
 The solver writes `s_parameters.csv` with:
@@ -15,6 +15,7 @@ them against the HFSS reference. It reports:
 Usage:
     python compare_with_hfss.py <hfss_csv> <out_dir>
         --solver <label>=<csv> [--solver <label>=<csv> ...]
+        [--baseline <label>=<old_csv>]
 
     python compare_with_hfss.py <hfss_csv> <out_dir> --batch-root result
         # scans immediate child directories containing s_parameters.csv
@@ -66,6 +67,13 @@ def _interp(grid: np.ndarray, df: pd.DataFrame, col: str) -> np.ndarray:
     return np.interp(grid, df["freq_GHz"].to_numpy(), df[col].to_numpy())
 
 
+def _interp_complex(grid: np.ndarray, df: pd.DataFrame, prefix: str) -> np.ndarray:
+    """Interpolate a complex solver trace component-wise on the comparison grid."""
+    real = np.interp(grid, df["freq_GHz"].to_numpy(), df[f"{prefix}_real"].to_numpy())
+    imag = np.interp(grid, df["freq_GHz"].to_numpy(), df[f"{prefix}_imag"].to_numpy())
+    return real + 1j * imag
+
+
 def _stats(name: str, diff: np.ndarray, unit: str) -> str:
     return (
         f"  {name}: max|Δ|={np.max(np.abs(diff)):.4f} {unit}, "
@@ -85,6 +93,12 @@ def main(argv: list[str]) -> int:
         help="Solver run as label=path/to/csv. Repeatable.",
     )
     parser.add_argument(
+        "--baseline",
+        action="append",
+        default=[],
+        help="Optimized-vs-baseline complex comparison as label=path/to/s_parameters.csv.",
+    )
+    parser.add_argument(
         "--batch-root",
         type=Path,
         help="Scan immediate child directories for s_parameters.csv and compare all runs.",
@@ -95,6 +109,12 @@ def main(argv: list[str]) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     hfss = _load_hfss(args.hfss_csv)
+    baselines: dict[str, pd.DataFrame] = {}
+    for spec in args.baseline:
+        if "=" not in spec:
+            parser.error(f"--baseline must be label=path, got {spec}")
+        label, path = spec.split("=", 1)
+        baselines[label] = _load_solver(Path(path))
     solver_runs = []
     solver_specs = list(args.solver)
     if args.batch_root is not None:
@@ -179,6 +199,36 @@ def main(argv: list[str]) -> int:
         summary_lines.append(_stats("|S21| dB", s21_db - s21_ref_db, "dB"))
         summary_lines.append(_stats("|S11| lin", s11 - s11_ref, ""))
         summary_lines.append(_stats("|S21| lin", s21 - s21_ref, ""))
+        complex_metrics = {
+            "baseline_max_abs_complex_s11": np.nan,
+            "baseline_relative_l2_complex_s11": np.nan,
+            "baseline_max_abs_complex_s21": np.nan,
+            "baseline_relative_l2_complex_s21": np.nan,
+        }
+        if label in baselines:
+            optimized_s11 = _interp_complex(grid, df, "S11")
+            optimized_s21 = _interp_complex(grid, df, "S21")
+            baseline_s11 = _interp_complex(grid, baselines[label], "S11")
+            baseline_s21 = _interp_complex(grid, baselines[label], "S21")
+            delta_s11 = optimized_s11 - baseline_s11
+            delta_s21 = optimized_s21 - baseline_s21
+            complex_metrics = {
+                "baseline_max_abs_complex_s11": float(np.max(np.abs(delta_s11))),
+                "baseline_relative_l2_complex_s11": float(
+                    np.linalg.norm(delta_s11) / max(np.linalg.norm(baseline_s11), 1e-300)
+                ),
+                "baseline_max_abs_complex_s21": float(np.max(np.abs(delta_s21))),
+                "baseline_relative_l2_complex_s21": float(
+                    np.linalg.norm(delta_s21) / max(np.linalg.norm(baseline_s21), 1e-300)
+                ),
+            }
+            summary_lines.append(
+                "  optimized vs baseline complex: "
+                f"S11 max={complex_metrics['baseline_max_abs_complex_s11']:.3e}, "
+                f"relL2={complex_metrics['baseline_relative_l2_complex_s11']:.3e}; "
+                f"S21 max={complex_metrics['baseline_max_abs_complex_s21']:.3e}, "
+                f"relL2={complex_metrics['baseline_relative_l2_complex_s21']:.3e}"
+            )
         summary_lines.append("")
         summary_records.append(
             {
@@ -202,6 +252,7 @@ def main(argv: list[str]) -> int:
                 "max_abs_lin_s21": float(np.max(np.abs(s21 - s21_ref))),
                 "mean_abs_lin_s21": float(np.mean(np.abs(s21 - s21_ref))),
                 "rms_lin_s21": float(np.sqrt(np.mean((s21 - s21_ref) ** 2))),
+                **complex_metrics,
             }
         )
 
