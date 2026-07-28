@@ -1,220 +1,119 @@
-# BP-FEM 频域求解器
+# BP-FEM 微波频域有限元求解器
 
-本目录包含一个基于 Visual Studio/CMake 的 C++17 频域 FEM 求解器原型，用于 `wg_bp_filter.aedt` 与 `current.ngmesh` 波导带通滤波器示例。
+BP-FEM 是一个面向微波器件宽带分析的 C++17 频域有限元求解器。它可以读取 AEDT 工程定义和 NGMesh 四面体网格，建立三维 Maxwell 有限元方程，计算端口 S 参数与电磁场，并用多种模型降阶算法加速扫频。
 
-如需按推荐路径阅读工程和拆分开发任务，请从 `docs/overview.md` 开始；若需要更细的专题入口，请进入 `docs/overview/README.md`。
+项目当前主要服务于波导滤波器和端口器件研究，同时也是一个用于比较 AWE、GAWE、MGAWE、WCAWE 与 ALPS 等快速扫频方法的实验平台。
 
-## 功能概览
+## 为什么做这个项目
 
-- **AEDT 工程读取**
-  - 材料定义
-  - 设计变量
-  - driven-modal 频率扫频
-  - 波端口 faceId 和源激励
-- **NGMesh 网格读取**
-  - body 信息
-  - 点坐标
-  - 表面 facet
-  - 四面体体网格单元
-- **频域 FEM 求解**
-  - 零阶 Nedelec/Whitney H(curl) 棱元
-  - 可选一阶层次棱元，每个四面体 20 个局部基函数
-  - 复数稀疏矩阵装配
-  - Intel oneMKL PARDISO 直接求解器
-  - BiCGSTAB fallback
-- **结果输出**
-  - `result/result_DIRECT/s_parameters.csv`
-  - `result/result_DIRECT/field_last.vtu`
-  - 可选逐频点 VTU 场文件
+对一个包含数十万自由度的三维电磁模型，传统扫频需要在每个频点重新装配或求解大型稀疏线性系统。频点增加后，数值分解时间和峰值内存很快成为主要成本。
 
-## 使用 Visual Studio 或 CMake 构建
+这个项目希望回答三个问题：
 
-可直接用 Visual Studio 的 CMake 集成打开本目录，也可以运行：
+1. 能否用开放、可检查的有限元流程复现商业软件的 S 参数结果？
+2. 能否在保持可控误差的前提下，用模型降阶减少宽带扫频中的大型求解次数？
+3. AWE-family 与 Lanczos-Padé 方法在精度、时间、内存和数值稳定性上分别适合什么场景？
+
+因此，项目不仅输出最终曲线，也记录矩阵分解、回代、降阶维数、正交性、残差、运行时间和峰值内存，方便对算法做可重复的比较。
+
+## 主要功能
+
+- **三维频域 FEM**：支持零阶 Whitney/Nédélec 棱元，并提供可选的一阶层次棱元。
+- **工程与网格输入**：读取 AEDT 中的材料、变量、扫频和端口定义，以及 NGMesh 四面体网格。
+- **端口建模**：支持数值端口模、矩形波导解析模和多模 TFE 端口。
+- **线性求解**：支持 Intel oneMKL PARDISO，并保留 BiCGSTAB、GMRES 与预条件器扩展接口。
+- **扫频方法**：提供 Direct、AWE、GAWE、MGAWE、WCAWE 和 ALPS。
+- **结果输出**：生成 S 参数 CSV、最后频点场 VTU、运行日志、计时和数值诊断文件。
+- **HFSS 校验**：仓库包含两套 HFSS S 参数参考数据，可用于比较 S11 和 S21。
+
+| 方法 | 主要特点 | 更适合的场景 |
+|---|---|---|
+| Direct | 每个频点求解完整 FEM 系统 | 基准结果、少量频点 |
+| AWE | 单点矩展开与 Padé 近似 | 展开点附近的窄带问题 |
+| GAWE | 单点矩空间正交化并进行 Galerkin 投影 | 比传统 AWE 更稳定的单点降阶 |
+| MGAWE | 多个展开点组成统一 Galerkin 空间 | 共振较多、频带较宽的问题 |
+| WCAWE | 在矩递推过程中构造良条件基 | 高阶单点展开、传统 AWE 易病态时 |
+| ALPS | 双边 Lanczos-Padé 降阶 | 追求较低在线扫频成本的实验路径 |
+
+## WCAWE 的优势
+
+WCAWE 的全称是 **Well-Conditioned Asymptotic Waveform Evaluation**。它解决的是传统 AWE 在阶数升高后，矩向量迅速趋于线性相关、条件数恶化的问题。
+
+本项目中的 WCAWE 按 Slone 等人在 2003 年提出的递推形式实现。新基向量不是在完整 AWE 矩生成后再统一做 QR，而是在每一阶求解前，就利用已有正交基和上三角矩阵构造校正项。这样做有几个实际好处：
+
+- 基在生成过程中保持良条件，高阶递推更不容易因矩向量病态而失效。
+- 不需要扩展全阶未知量，内存主体仍约为 `N × q` 的降阶基。
+- 单展开点只需对展开矩阵做一次数值分解，`q` 阶模型随后执行 `q` 个 RHS 回代。
+- 相比需要多个展开点的 MGAWE，单点 WCAWE 通常需要更少的全阶矩阵分解。
+- 会输出条件数、递推残差、基关系残差和正交误差，数值稳定性可以被直接检查。
+
+WCAWE 的优势主要是**高阶数值稳定性和单点离线成本**，并不意味着它在所有宽带问题上都比 MGAWE 更精确。当前 90–100 GHz、约 36.5 万自由度的算例中，`q=12` 的 WCAWE 对 HFSS 的 S11/S21 幅值相对 L2 误差约为 `0.774%/0.990%`；继续提高到 `q=20/30/40` 时递推仍然稳定，但宽带误差没有单调下降。对于跨越多个共振的宽频带，MGAWE 的多展开点覆盖通常更有优势。
+
+WCAWE 的数学推导和代码约定见 [WCAWE 文档](docs/optimization/awe-family/wcawe-skill.md)。
+
+## 快速开始
+
+### 1. 构建
+
+推荐使用 Visual Studio 2022、CMake 和 Intel oneMKL：
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Release
+cmake -S . -B build_pardiso -DBPFEM_USE_MKL=ON
+cmake --build build_pardiso --config Release
 ```
 
-如果 Intel oneMKL 可用，CMake 默认启用 `BPFEM_USE_MKL` 并链接 PARDISO 稀疏直接求解器。若要强制使用迭代 fallback：
+没有 oneMKL 时可以构建迭代求解版本：
 
 ```powershell
 cmake -S . -B build -DBPFEM_USE_MKL=OFF
+cmake --build build --config Release
 ```
 
-## 模块布局
+### 2. 运行一次 WCAWE 扫频
 
-求解器组织为可复用静态库和轻量命令行入口。Phase 1 接口化（详见
-`docs/optimization/strategy-interfaces/plan.md`）后，运行时分发全部走工厂 +
-抽象接口；新增策略只动新文件 + 工厂的一行注册。
-
-```text
-include/bpfem/
-  app/        命令行应用门面
-  core/       常量、数学函数、共享数据类型、日志和工具
-  fem/        Nedelec 边拓扑和 curl-curl FEM 装配（含 NPM）
-  bc/         IBoundaryCondition 抽象 + WavePortBC + Absorbing/Impedance/FiniteConductor 占位
-  linalg/     SparseMatrix + ISparseSolver / IPreconditioner 抽象 + 后端实现
-  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep + AweSweep + GaweSweep + MgaweSweep + WcaweSweep
-  factory/    SparseSolverFactory + SweepStrategyFactory（按 Options 路由）
-  apm/        解析端口模 (Analytic Port Mode)
-  tfe/        超限元端口模 (Transfinite Element)
-  mor/        [DEPRECATED] AlpsSweep 旧路径，转发到 sweep/
-  io/         AEDT 与 NGMesh 输入前端
-  post/       S 参数提取和 VTU/CSV 输出
-src/                       镜像 include 目录
-src/main.cpp               轻量入口
-```
-
-- **`bp_fem_core`**：可复用静态求解器库。
-- **`bp_fem_solver`**：链接 `bp_fem_core` 的 CLI 程序。
-
-## 运行
+下面的命令使用仓库内的 IOStructure 工程、当前零阶网格和 PARDISO，对 90–100 GHz 执行 101 点扫频：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result
+.\build_pardiso\Release\bp_fem_solver.exe `
+  --aedt IOStructure.aedt `
+  --mesh current.ngmesh `
+  --basis-order 0 `
+  --port-method numerical `
+  --linear-solver direct `
+  --sweep wcawe `
+  --wcawe-order 12 `
+  --max-sweep-points 101 `
+  --no-write-all-fields `
+  --out result
 ```
 
-`--out` 现在表示统一结果根目录。程序会按当前 sweep 自动写入固定子目录，例如 direct 写入 `result/result_DIRECT`，AWE 写入 `result/result_AWE`；每次运行前只清空对应算法子目录。
+结果写入 `result/result_WCAWE/`。再次运行 WCAWE 时只会清空并重建这个子目录，不会不断创建带频点数的新目录。
 
-默认使用零阶棱元。若要启用一阶层次棱元：
+常用结果文件包括：
 
-```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 1 --out result
-```
+- `s_parameters.csv`：复数 S 参数及幅值。
+- `field_last.vtu`：最后频点的重构场，可用 ParaView 或 VisIt 查看。
+- `run.log`、`run.json`：运行过程与环境信息。
+- `timing.json`：分解、回代、离线建模、在线扫频和峰值内存。
+- `diagnostics.json`：残差、正交性、矩匹配和算法终止原因。
+- `basis_condition.csv`：WCAWE 各阶基条件与递推诊断。
 
-快速检查可运行：
+## 示例与参考数据
 
-```powershell
-.\build\Release\bp_fem_solver.exe --max-sweep-points 3 --max-iterations 100
-```
+- `wg_bp_filter.aedt` 与 `wg_bp_filter_S_parameters.csv`：40–43 GHz 波导带通滤波器示例。
+- `IOStructure.aedt`、`current.ngmesh` 与 `IOStructure_S_parameters.csv`：90–100 GHz、约 36.5 万未知量的当前大网格基准。
 
-如需为每个频点写出 VTU 场文件：
+HFSS 数据用于外部校验，不是求解器的网格来源。求解器直接读取 `current.ngmesh` 建立自己的有限元拓扑和矩阵。
 
-```powershell
-.\build\Release\bp_fem_solver.exe --write-all-fields
-```
+## 文档
 
-如需关闭逐频点 VTU（例如长扫频时减少磁盘占用）：
+- [工程与命令参考](docs/engineering-reference.md)：完整 CLI、输出约定、模块布局和开发者信息。
+- [项目阅读入口](docs/overview.md)：运行流程、扩展点和文档地图。
+- [AWE-family](docs/optimization/awe-family/README.md)：AWE、GAWE、MGAWE、WCAWE 理论与验证。
+- [ALPS](docs/optimization/alps-sweep/README.md)：Lanczos-Padé 路径与当前实现状态。
+- [测试](docs/testing/README.md)：构建、单元测试和烟测。
+- [验证](docs/validation/README.md)：端口、残差、S 参数和场结果检查。
 
-```powershell
-.\build\Release\bp_fem_solver.exe --no-write-all-fields
-```
+## 当前定位
 
-VTU 抽样密度由 `--field-output-order 1|2|3` 控制：1 = 每四面体 4 顶点（与历史行为兼容）；2 = 4 顶点 + 6 边中点（一阶基函数默认）；3 = 再加 4 面心（用于核对一阶 face bubble）。该选项与 `--basis-order` 解耦，仅影响 VTU 抽样不影响 S 参数 CSV。
-
-## 快速扫频（ALPS）
-
-如需把扫频时间从 N 次直接求解降到一次离线 + N 次廉价投影：
-
-```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 0 --sweep alps --alps-order 12 --no-write-all-fields
-```
-
-当前 ALPS 使用单展开点双边 Lanczos-Padé、P1 端口线性化和 PARDISO 分解复用，不再是早期复对称 Galerkin MVP。IOStructure 零阶 364932 DOF、101 点基准中，S11/S21 对 HFSS 的幅值相对 L2 误差约为 2.9%/0.62%；详见 `docs/optimization/alps-sweep/plan.md`。
-
-## 快速扫频（AWE / GAWE / MGAWE / WCAWE）
-
-单点 Padé AWE：
-
-```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep awe --awe-order 8 --no-write-all-fields --out result
-```
-
-单点 Galerkin AWE（GAWE）：
-
-```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep gawe --gawe-order 12 --no-write-all-fields --out result
-```
-
-多点 Galerkin AWE（MGAWE）：
-
-```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep mgawe --mgawe-points 3 --mgawe-order 4 --no-write-all-fields --out result
-```
-
-良条件 AWE（WCAWE）：
-
-```powershell
-.\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out result
-```
-
-- `--gawe-order`：单展开点生成并正交化的 AWE 矩向量数量，用于构造一个 Galerkin ROM。
-- `--gawe-expansion`：GAWE 展开频率；不指定时默认取扫频区间中心。
-- `--mgawe-points`：在扫频区间内自动均匀选择展开点，例如 3 点对应左端、中心、右端。
-- `--mgawe-order`：每个展开点生成的局部 AWE 矩向量数量。
-- MGAWE 会把所有局部矩向量正交化成一个统一 Galerkin ROM，不是多个局部模型拼接。
-- `--wcawe-order`：单展开点 WCAWE 的目标良条件基维度。
-- WCAWE 会输出 `basis_condition.csv`，记录传统 AWE 矩基与 WCAWE 正交基的条件曲线。
-- 每次运行都会输出 `run.log`、`run.json`、`timing.json` 和 `diagnostics.json`，可用于和 direct / ALPS / AWE / GAWE / MGAWE / WCAWE 做时间、峰值内存、ROM 维度、deflation、正交性和无源性偏差对比。
-- WCAWE 额外输出 `basis_condition.csv`，其中包含传统 AWE 矩基条件代理、WCAWE 正交基条件代理、`R` 对角元和 `X≈VR` 重构误差。
-- HFSS 批量对比可使用 `scripts/compare_with_hfss.py "wg_bp_filter_S_parameters.csv" result/result_BENCHMARK --batch-root result`，脚本会扫描 `result/result_*` 中含 `s_parameters.csv` 的结果目录并输出 `benchmark_summary.csv`。
-
-## 端口建模选择（NPM / APM / TFE）
-
-CLI `--port-method` 控制端口模建立方式：
-
-```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1                                              # NPM (默认), 二维 H(curl) 数值本征主模
-.\build\Release\bp_fem_solver.exe --basis-order 1 --port-method analytic                       # APM, 单 TE10 解析闭式
-.\build\Release\bp_fem_solver.exe --basis-order 1 --port-method tfe --tfe-modes-per-port 5     # TFE, 数值多模
-```
-
-- `numerical`（默认）：在端口面三角网上求解 2D H(curl) 广义本征 `K_port v = k_c² M_port v`，取最低非伪本征对作为主模。任意截面（矩形 / 脊形 / 圆形 / 偏心）都可用。模块 `bpfem::fem::PortModeSolver`。
-- `analytic`：闭式 TE10 + FE L2 投影；仅适用于 PCA 可拟合为矩形的端口。作为闭式参考路径保留。模块 `bpfem::apm`。详见 `docs/optimization/analytic-port/`。
-- `tfe`：与 numerical 同一二维本征解，但保留 N 个最低物理本征对，每个模并入秩-1 端口算子。模块 `bpfem::tfe`。详见 `docs/optimization/transfinite-element/`。
-- `--tfe-modes-per-port 1` 时 TFE 与 numerical 字节级等价。
-- 与 `--sweep alps` 兼容（按 (face, mode) 展开为虚拟端口）。
-
-## 求解器后端与预条件（CLI）
-
-Phase 1 接口化之后线性求解器和预条件可以在运行时切换，不需要重新编译：
-
-```powershell
-# 默认（推荐）：MKL 构建走 PARDISO，否则 BiCGSTAB（与 main 分支字节级一致）
-.\build\Release\bp_fem_solver.exe
-
-# GMRES + ILU(0) （插件式占位，当前 H(curl) 频域系统上不收敛）
-.\build\Release\bp_fem_solver.exe --linear-solver gmres --precon ilu0 --tolerance 1e-7 --max-iterations 1500 --gmres-restart 50
-
-# BiCGSTAB + Jacobi（同样不收敛，框架占位）
-.\build\Release\bp_fem_solver.exe --linear-solver bicgstab --precon jacobi
-```
-
-- `--linear-solver auto|direct|bicgstab|gmres`：默认 `auto`，按构建期 `BPFEM_USE_MKL`
-  路由。`direct` 在无 MKL 构建上会 throw，`bicgstab` / `gmres` 始终可用。
-- `--precon none|jacobi|ilu0`：默认 `none`。仅对迭代法生效；`direct` 时静默忽略。
-- `--gmres-restart 30`：GMRES 重启长度，默认 30。
-
-**重要**：`bicgstab` / `gmres` + 任何当前实现的预条件（`jacobi` / `ilu0`）在频域
-H(curl) indefinite 系统（`A = K - k₀² M + jβ m mᵀ`）上**不收敛**。BP filter 实测：
-
-| 配置 | 1500 iter 后残差 |
-|---|---|
-| GMRES(50) + ILU(0) | 0.98 |
-| BiCGSTAB + Jacobi (4000 iter) | 0.91 |
-
-这是 H(curl) 频域 Maxwell 的领域共识：indefinite 谱跨原点，常规预条件不能消除
-原点附近的奇点。真正能用的预条件是 AMS (Hiptmair-Xu) / Schwarz-DDM /
-shifted Laplacian + multigrid，工程成本 ~2000+ 行且需离散梯度算子等额外结构，
-当前未实现。**生产请走 PARDISO**；GMRES / ILU(0) / Jacobi 框架作为后续 AMS 等
-H(curl) 专用预条件接入的 plug-in 占位保留。
-
-加新求解器后端 / 新预条件 / 新边界条件 / 新扫频策略的标准步骤见
-`docs/optimization/strategy-interfaces/example.md`。
-
-## 文档入口
-
-- **工程阅读总览**：`docs/overview.md`
-- **项目树说明**：`docs/project-tree.md`
-- **工程总览专题**：`docs/overview/README.md`
-- **架构说明**：`docs/architecture/README.md`
-- **原语文档索引**：`docs/primitives/README.md`
-- **测试说明**：`docs/testing/README.md`
-- **验证说明**：`docs/validation/README.md`
-- **任务拆分指南**：`docs/task-splitting/README.md`
-- **开发流程**：`docs/development-workflow/README.md`
-
-## 备注
-
-数值内核默认使用零阶四面体 Whitney/Nedelec 棱元，并支持可选一阶层次棱元、全局 H(curl) 自由度、curl-curl 体装配、PEC 切向边界约束、数值波端口模态边投影、S 参数 CSV 输出和重构矢量场 VTU 输出。
+BP-FEM 目前是研究与算法验证性质的求解器，不是商业电磁软件的完整替代品。快速扫频路径目前重点覆盖无损材料、单端口激励和 P1 端口色散模型；涉及有损材料、更复杂端口色散或生产级鲁棒性时，应优先使用 Direct 路径进行交叉验证。
