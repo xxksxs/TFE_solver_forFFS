@@ -29,6 +29,8 @@ struct FrequencyStat {
     double assembleSec = 0.0;
     double solveSec = 0.0;
     double residual = 0.0;
+    double absoluteResidual = 0.0;
+    std::string linearSolveStatus;
     int iterations = 0;
     double s11Db = 0.0;
     double s21Db = 0.0;
@@ -75,6 +77,7 @@ struct RunReport {
     std::uint64_t factorizedRhsSolveCount = 0;
     std::uint64_t factorizedSolveCallCount = 0;
     std::uint64_t batchRhsMax = 0;
+    std::uint64_t estimatedSolverPeakKiB = 0;
     double symbolicAnalysisSec = 0.0;
     double numericFactorizationSec = 0.0;
     double factorizedRhsSolveSec = 0.0;

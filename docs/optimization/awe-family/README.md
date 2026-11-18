@@ -1,5 +1,7 @@
 # AWE / GAWE / MGAWE / WCAWE 快速扫频算法族
 
+现行 CLI、公式与工程接线见[公式复现](paper-reproduction.md)。本文保留设计分工和早期实施计划。
+
 本文档组记录 AWE、GAWE、MGAWE、WCAWE 四类 FEM 快速扫频算法的工程 skill。它们的共同目标是：
 在少量展开点上提取矩信息，构造低阶传递模型，从而避免对每个频率点都进行一次完整 FEM 求解。
 

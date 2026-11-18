@@ -30,6 +30,7 @@ public:
 
     // 返回构造 Padé 分母时小系统的主元比，用于诊断病态程度。
     double pivotRatio() const { return pivotRatio_; }
+    double coefficientMatchingError() const { return coefficientMatchingError_; }
 
     // 返回分子多项式系数。
     const std::vector<Complex>& numerator() const { return numerator_; }
@@ -41,6 +42,7 @@ private:
     std::vector<Complex> numerator_;
     std::vector<Complex> denominator_;
     double pivotRatio_ = 1.0;
+    double coefficientMatchingError_ = 0.0;
 };
 
 }  // namespace fem::fastsweep

@@ -64,7 +64,7 @@ bp_fem_solver.exe `
   --mesh <mesh.ngmesh> `
   --basis-order 0|1 `
   --port-method numerical|analytic|tfe `
-  --linear-solver auto|direct|bicgstab|gmres `
+  --linear-solver auto|direct|bicgstab|gmres|mumps `
   --sweep direct|awe|gawe|mgawe|wcawe|alps `
   --out result
 ```
@@ -79,7 +79,7 @@ bp_fem_solver.exe `
 | `--max-sweep-points` | 从工程扫频中最多取多少个频点 |
 | `--port-method` | 数值端口、解析 TE10 或多模 TFE |
 | `--linear-solver` | 自动路由、PARDISO 直接法或迭代法 |
-| `--precon` | `none`、`jacobi` 或 `ilu0`，只对迭代法生效 |
+| `--precon` | `none`、`jacobi`、`ilu0` 或 `schwarz`，只对迭代法生效 |
 | `--sweep` | 选择直接扫频或快速扫频策略 |
 | `--write-all-fields` | 为每个频点写 VTU |
 | `--no-write-all-fields` | 只保留最后频点场，长扫频推荐 |
@@ -89,6 +89,8 @@ bp_fem_solver.exe `
 参数解析和默认值以 `src/app/Application.cpp` 为准。新增参数时必须同步 CLI 帮助、README/本文和 smoke test。
 
 ## 扫频策略
+
+当前 AWE 逐场 Padé（`--awe-field-pade`）、MGAWE 固定点与自适应（`--mgawe-expansion`、`--mgawe-adaptive`、`--mgawe-2001`）以及 WCAWE 独立矩检查（`--wcawe-check-moments`）的参数和限制见[公式复现](optimization/awe-family/paper-reproduction.md)。
 
 ### Direct
 
@@ -158,7 +160,7 @@ bp_fem_solver.exe `
 - `direct`：强制 PARDISO；无 MKL 构建应明确报错。
 - `bicgstab`、`gmres`：迭代后端，保留 Jacobi/ILU0 扩展接口。
 
-当前常规预条件器对频域 H(curl) 不定系统的效果有限。生产基准和 fast-sweep 离线阶段优先使用 PARDISO。支持分解复用的后端通过 `IFactorizedSparseSolver` 暴露 `factorize`、`solveFactorized` 和批量 RHS 能力。
+当前工作树还提供可选 MUMPS 后端、PARDISO out-of-core、Schwarz 预条件和 MKL SpMV 入口。构建依赖和组合限制见[求解器选择](architecture/solver-selection.md)。常规预条件器对频域 H(curl) 不定系统的效果需按具体算例验证。生产基准和 fast-sweep 离线阶段优先使用 PARDISO。支持分解复用的后端通过 `IFactorizedSparseSolver` 暴露 `factorize`、`solveFactorized` 和批量 RHS 能力。
 
 ## 结果目录与文件
 

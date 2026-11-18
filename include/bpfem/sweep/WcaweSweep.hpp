@@ -17,6 +17,7 @@ namespace fem::sweep {
 
 struct WcaweOptions {
     // 论文 WCAWE 单展开点递推的目标基阶数。
+    bool checkMoments = false;
     int order = 12;
 
     // 展开频率，单位 Hz；取 0 时使用扫频带中心。
@@ -75,6 +76,7 @@ private:
     const PortModeSolver& portModeSolver_;
     WcaweOptions options_;
 
+    double fullMomentProjectionError_ = -1.0;
     bool ready_ = false;
     int romDim_ = 0;
     int fullDim_ = 0;

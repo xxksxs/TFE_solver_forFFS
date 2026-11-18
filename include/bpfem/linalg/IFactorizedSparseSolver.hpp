@@ -19,6 +19,7 @@ struct FactorizationStatistics {
     double symbolicAnalysisSec = 0.0;
     double numericFactorizationSec = 0.0;
     double factorizedRhsSolveSec = 0.0;
+    std::uint64_t estimatedSolverPeakKiB = 0;
 };
 
 // 可复用数值分解的直接求解器能力接口。

@@ -3,6 +3,7 @@
 #include "bpfem/app/Application.hpp"
 #include "bpfem/core/RunEnvironment.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <ios>
 #include <iomanip>
@@ -86,6 +87,10 @@ public:
     void value(int v)                { write_(std::to_string(v)); }
     void value(std::size_t v)        { write_(std::to_string(v)); }
     void value(double v)             {
+        if (!std::isfinite(v)) {
+            write_("null");
+            return;
+        }
         std::ostringstream oss;
         oss << std::setprecision(15) << v;
         write_(oss.str());
@@ -195,6 +200,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
             case LinearSolverKind::Direct:   ls = "direct"; break;
             case LinearSolverKind::BiCGStab: ls = "bicgstab"; break;
             case LinearSolverKind::Gmres:    ls = "gmres"; break;
+            case LinearSolverKind::Mumps:    ls = "mumps"; break;
             case LinearSolverKind::Auto:     ls = "auto"; break;
         }
         add("linearSolver", ls);
@@ -204,11 +210,19 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
         switch (options.preconditioner) {
             case PreconditionerKind::Jacobi: p = "jacobi"; break;
             case PreconditionerKind::Ilu0:   p = "ilu0"; break;
+            case PreconditionerKind::Schwarz: p = "schwarz"; break;
             case PreconditionerKind::None:   p = "none"; break;
         }
         add("preconditioner", p);
     }
     add("gmresRestart", std::to_string(options.gmresRestart));
+    add("iterativeSpmv", options.iterativeMklSpmv ? "mkl" : "native");
+    add("pardisoMode", options.pardisoOutOfCore ? "ooc" : "incore");
+    add("mumpsMode", options.mumpsMode);
+    add("mumpsBlrTolerance", std::to_string(options.mumpsBlrTolerance));
+    add("schwarzSubdomains", std::to_string(options.schwarzSubdomains));
+    add("schwarzOverlap", std::to_string(options.schwarzOverlap));
+    add("schwarzLocalSolver", options.schwarzLocalMumps ? "mumps" : "pardiso");
 }
 
 bool writeRunReport(const std::filesystem::path& path, const RunReport& report) {
@@ -251,6 +265,8 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
       w.value(static_cast<std::size_t>(report.factorizedSolveCallCount));
       w.key("batch_rhs_max");
       w.value(static_cast<std::size_t>(report.batchRhsMax));
+      w.key("estimated_solver_peak_kib");
+      w.value(static_cast<std::size_t>(report.estimatedSolverPeakKiB));
 
       w.key("options");
       w.beginObject();
@@ -280,6 +296,10 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
               w.key("assemble_s");  w.value(fp.assembleSec);
               w.key("solve_s");     w.value(fp.solveSec);
               w.key("residual");    w.value(fp.residual);
+              if (!fp.linearSolveStatus.empty()) {
+                  w.key("absolute_residual"); w.value(fp.absoluteResidual);
+                  w.key("linear_solve_status"); w.value(fp.linearSolveStatus);
+              }
               w.key("iterations");  w.value(fp.iterations);
               w.key("s11_db");      w.value(fp.s11Db);
               w.key("s21_db");      w.value(fp.s21Db);
@@ -318,6 +338,10 @@ bool writeTimingReport(const std::filesystem::path& path, const RunReport& repor
       w.key("basis_order");         w.value(optionValue(report, "basisOrder"));
       w.key("max_sweep_points");    w.value(optionValue(report, "maxSweepPoints"));
       w.key("linear_solver");       w.value(optionValue(report, "linearSolver"));
+      w.key("pardiso_mode");        w.value(optionValue(report, "pardisoMode"));
+      w.key("mumps_mode");          w.value(optionValue(report, "mumpsMode"));
+      w.key("iterative_spmv");      w.value(optionValue(report, "iterativeSpmv"));
+      w.key("schwarz_local_solver"); w.value(optionValue(report, "schwarzLocalSolver"));
       w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
       w.key("preconditioner");      w.value(optionValue(report, "preconditioner"));
       w.key("offline_build_s");      w.value(report.offlineBuildSec);
@@ -345,6 +369,8 @@ bool writeTimingReport(const std::filesystem::path& path, const RunReport& repor
       w.key("frequency_points");    w.value(report.sweep.size());
       w.key("total_assemble_s");    w.value(totalAssembleSec);
       w.key("total_solve_s");       w.value(totalSolveSec);
+      w.key("estimated_solver_peak_kib");
+      w.value(static_cast<std::size_t>(report.estimatedSolverPeakKiB));
       w.key("phases");
       w.beginArray();
         for (const auto& p : report.phases) {

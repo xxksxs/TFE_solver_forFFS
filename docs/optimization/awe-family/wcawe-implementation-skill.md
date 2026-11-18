@@ -272,7 +272,9 @@ struct WcaweAppendResult {
 
 每个成功阶只允许一次 A0 回代。P_U 三角回代是 q 维小系统，不得调用 PARDISO。
 
-## 9. 当前 P1 工程适配
+## 9. 历史 P1 工程适配
+
+本节及后文的 P1 基准描述旧工程接线。当前 CLI 的高阶接线与独立矩校验见[公式复现](paper-reproduction.md)。式 (7)–(9) 的索引、上三角乘积和构基约定仍适用。
 
 WcaweSweep::buildOffline 必须改为：
 

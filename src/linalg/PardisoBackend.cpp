@@ -5,17 +5,22 @@
 namespace fem::linalg {
 
 // 创建持有单个 MKL PARDISO 状态对象的后端。
-PardisoBackend::PardisoBackend() = default;
+PardisoBackend::PardisoBackend(bool outOfCore) : outOfCore_(outOfCore)
+#ifdef BPFEM_USE_MKL
+    , solver_(outOfCore)
+#endif
+{}
 
 // 保留一次性求解语义，内部由 PARDISO 分解与回代两阶段完成。
 SolveResult PardisoBackend::solve(const SparseMatrix& matrix,
                                   const std::vector<std::complex<double>>& rhs,
-                                  const SolverConfig& /*config*/) {
+                                  const SolverConfig& config) {
 #ifdef BPFEM_USE_MKL
-    return solver_.solve(matrix, rhs);
+    return solver_.solve(matrix, rhs, config.tolerance);
 #else
     (void)matrix;
     (void)rhs;
+    (void)config;
     throw std::runtime_error(
         "PardisoBackend: this binary was built without BPFEM_USE_MKL, "
         "but the sparse solver factory selected PARDISO. Rebuild with -DBPFEM_USE_MKL=ON "

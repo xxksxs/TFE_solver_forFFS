@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace fem {
 
@@ -39,7 +41,8 @@ enum class LinearSolverKind {
     Auto,
     Direct,
     BiCGStab,
-    Gmres
+    Gmres,
+    Mumps
 };
 
 // Iterative-solver preconditioner selection. None = no preconditioning
@@ -50,7 +53,8 @@ enum class LinearSolverKind {
 enum class PreconditionerKind {
     None,
     Jacobi,
-    Ilu0
+    Ilu0,
+    Schwarz
 };
 
 struct Options {
@@ -71,14 +75,19 @@ struct Options {
     SweepStrategy sweepStrategy = SweepStrategy::Direct;
     int alpsOrder = 12;                     // scalar [q-1/q] Lanczos-Padé order
     double alpsExpansionFrequencyHz = 0.0;  // 0 means "use band center"
+    bool aweFieldPade = false;
     int aweOrder = 8;                       // q for [q-1/q] Padé
     double aweExpansionFrequencyHz = 0.0;   // 0 means "use band center"
     int gaweOrder = 12;                     // single-point Galerkin AWE basis size
     double gaweExpansionFrequencyHz = 0.0;  // 0 means "use band center"
     double gaweDropTolerance = 1.0e-10;     // MGS deflation threshold
+    bool mgaweAdaptive = false;
+    bool mgawe2001 = false;
+    std::vector<std::pair<double, int>> mgaweExpansions;
     int mgawePointCount = 3;                // number of expansion points
     int mgaweOrder = 8;                     // local moment count per expansion point
     double mgaweDropTolerance = 1.0e-10;    // global basis deflation threshold
+    bool wcaweCheckMoments = false;
     int wcaweOrder = 12;                    // target well-conditioned basis size
     double wcaweExpansionFrequencyHz = 0.0; // 0 means "use band center"
     double wcaweDropTolerance = 1.0e-12;    // R diagonal / MGS deflation threshold
@@ -91,12 +100,19 @@ struct Options {
 
     // Sparse solver backend selection (Step 1 of strategy-interfaces phase).
     LinearSolverKind linearSolver = LinearSolverKind::Auto;
+    bool pardisoOutOfCore = false;
+    std::string mumpsMode = "incore";
+    double mumpsBlrTolerance = 1.0e-10;
 
     // Iterative-solver preconditioner selection (Step 3).
     PreconditionerKind preconditioner = PreconditionerKind::None;
+    int schwarzSubdomains = 8;
+    int schwarzOverlap = 1;
+    bool schwarzLocalMumps = false;
 
     // GMRES restart length (only used when linearSolver == Gmres).
     int gmresRestart = 30;
+    bool iterativeMklSpmv = false;
 };
 
 Options parseOptions(int argc, char** argv);

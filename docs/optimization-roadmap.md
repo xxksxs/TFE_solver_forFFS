@@ -36,7 +36,7 @@
 4. **材料模型单一**：标量、频率独立，缺各向异性张量、Debye/Drude/Lorentz 多极色散、铁氧体/旋磁、薄层/表面粗糙、温度相关、非线性。
 5. **网格自适应缺失**：无误差估计驱动的 h / p / hp 自适应，无目标量误差控制，无非协调网格。
 6. **几何能力缺失**：无 CAD（STEP/IGES/Parasolid/ACIS）导入、无几何核（OCCT/Parasolid 集成）、无网格生成器（依赖外部 NGMesh）、无曲边/曲面单元。
-7. **求解器手段单薄**：直接 PARDISO + 弱 BiCGSTAB，缺 AMS/HX/多重网格/AMG 等谱等价预处理、缺 DDM/FETI-DP 区域分解、缺特征模/谐振腔本征求解、缺 AWE/Krylov MOR 快速扫频。
+7. **求解器手段单薄**：直接 PARDISO + 弱 BiCGSTAB，缺 AMS/HX/多重网格/AMG 等谱等价预处理、缺 DDM/FETI-DP 区域分解、缺特征模/谐振腔本征求解、已有 AWE 系列与单点 ALPS，通用 Krylov MOR 及其他路线在对应专题跟踪。
 8. **并行化几乎为零**：单线程装配、单节点求解，无 OpenMP/TBB、无 MPI、无 GPU。
 9. **后处理薄弱**：只输出 S11/S21 + VTU，缺 Touchstone / Y / Z / 群时延 / 远场方向图 / 增益 / 轴比 / RCS / 端口去嵌 / 端口重归一化 / Q 值 / 谐振参数 / 表面电流。
 10. **多物理与时域缺失**：无瞬态时域 (TD-FEM / DGTD)、无热-电耦合、无电路 (SPICE/Touchstone) 联仿、无优化与参数扫描框架。

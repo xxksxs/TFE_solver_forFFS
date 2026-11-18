@@ -15,6 +15,7 @@ cmake_install.cmake
 CTestTestfile.cmake
 install_manifest.txt
 Testing/
+!/docs/testing/
 *.cmake.in.cache
 
 # =====================================================================

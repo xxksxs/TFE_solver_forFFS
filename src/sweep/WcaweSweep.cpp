@@ -2,6 +2,8 @@
 
 #include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
 #include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
+#include "bpfem/fastsweep/PolynomialMomentRecurrence.hpp"
+#include "bpfem/fastsweep/LinearAlgebra.hpp"
 #include "bpfem/linalg/FactorizedSolveSession.hpp"
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 
@@ -102,6 +104,7 @@ SweepResult WcaweSweep::run(const std::vector<double>& frequencies,
     if (!ctx.outputDirectory.empty()) {
         fastsweep::FastSweepDiagnostics diagnostics;
         diagnostics.algorithm = name();
+        diagnostics.model = "wavenumber_taylor_polynomial";
         diagnostics.expansionFrequenciesHz = {expansionHz};
         diagnostics.requestedOrder = options_.order;
         diagnostics.romDimension = romDim_;
@@ -141,8 +144,8 @@ SweepResult WcaweSweep::run(const std::vector<double>& frequencies,
             diagnostics.batchRhsMax = statistics.batchRhsMax;
         }
         diagnostics.reducedSolveSucceeded = model_.lastSolveSucceeded();
-        diagnostics.maxPassivityError =
-            fastsweep::maxPassivityError(output.points);
+        diagnostics.fullMomentProjectionError = fullMomentProjectionError_;
+        diagnostics.maxPassivityError = fastsweep::maxPassivityError(output.points);
         const auto diagnosticsPath =
             ctx.outputDirectory / "diagnostics.json";
         if (fastsweep::writeDiagnosticsJson(diagnosticsPath, diagnostics)) {
@@ -155,7 +158,7 @@ SweepResult WcaweSweep::run(const std::vector<double>& frequencies,
     return output;
 }
 
-// 将工程 P1 线性化适配成通用多项式模型，并按式 (7)-(9)构造 WCAWE 基。
+// 将工程高阶端口多项式适配成通用多项式模型，并按式 (7)-(9)构造 WCAWE 基。
 int WcaweSweep::buildOffline(double expansionFrequencyHz,
                              linalg::ISparseSolver& solver,
                              const linalg::SolverConfig& solverConfig) {
@@ -165,6 +168,7 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     }
 
     ready_ = false;
+    fullMomentProjectionError_ = -1.0;
     expansionFrequencyHz_ = expansionFrequencyHz;
     numProjectPorts_ = static_cast<int>(project_.ports.size());
     affine_ = assembler_.buildAffineSystem();
@@ -182,48 +186,31 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     const auto portVectors =
         fastsweep::PolynomialPortMomentBuilder::buildPortVectors(
             affine_, affine_.K.size());
-    const auto linearization =
-        fastsweep::PolynomialPortMomentBuilder::buildLosslessLinearization(
-            project_, assembler_, portModeSolver_, affine_,
-            expansionFrequencyHz, portVectors);
+    using Builder = fastsweep::PolynomialPortMomentBuilder;
+    auto series = Builder::buildTaylorSeries(project_, portModeSolver_, affine_,
+        expansionFrequencyHz, std::max(2, options_.order), Builder::Variable::WavenumberShift);
+    std::vector<Complex> rhs0;
+    const auto a0 = assembler_.assemble(expansionFrequencyHz, rhs0);
 
     fastsweep::PolynomialWcaweModel polynomial;
-    polynomial.fullDimension = linearization.rhs0.size();
-    polynomial.matrixDegree = 1;
-    polynomial.rhsDegree = 1;
-    polynomial.applyA0 =
-        [&linearization](const std::vector<Complex>& vector) {
-            return linearization.matrixAtExpansion.multiply(vector);
-        };
-    polynomial.applyHigherOrder.push_back(
-        [this, &linearization, &portVectors](
-            const std::vector<Complex>& vector) {
-            return fastsweep::PolynomialPortMomentBuilder::
-                applyLosslessFirstOrderMatrix(
-                    affine_, linearization, portVectors, vector);
+    polynomial.fullDimension = rhs0.size();
+    polynomial.matrixDegree = series.lambda.size() - 1;
+    polynomial.rhsDegree = polynomial.matrixDegree;
+    polynomial.applyA0 = [&a0](const std::vector<Complex>& vector) { return a0.multiply(vector); };
+    for (std::size_t r = 1; r <= polynomial.matrixDegree; ++r) {
+        polynomial.applyHigherOrder.push_back([&, r](const std::vector<Complex>& vector) {
+            return Builder::applyMatrixCoefficient(affine_, series, portVectors, r, vector);
         });
-    polynomial.rhsCoefficientAt =
-        [&linearization](std::size_t order) {
-            if (order == 0) {
-                return linearization.rhs0;
-            }
-            if (order == 1) {
-                return linearization.rhs1;
-            }
-            return std::vector<Complex>(
-                linearization.rhs0.size(), Complex(0.0, 0.0));
-        };
+    }
+    polynomial.rhsCoefficientAt = [&](std::size_t order) {
+        return order == 0 ? rhs0 : Builder::rhsCoefficient(series, portVectors, rhs0.size(), order);
+    };
 
-    linalg::FactorizedSolveSession solveSession(
-        solver, linearization.matrixAtExpansion, solverConfig);
+    linalg::FactorizedSolveSession solveSession(solver, a0, solverConfig);
     auto solveAtExpansion =
-        [&solveSession](const std::vector<Complex>& rhs) {
+        [&](const std::vector<Complex>& rhs) {
             SolveResult result = solveSession.solve(rhs);
-            if (result.field.size() != rhs.size()
-                || !std::isfinite(result.residual)) {
-                throw std::runtime_error(
-                    "WcaweSweep: expansion solve returned an invalid result");
-            }
+            linalg::requireConverged(result, solver.name());
             return std::move(result.field);
         };
 
@@ -236,6 +223,11 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     wcaweBuild_ = fastsweep::PolynomialWcaweRecurrence::build(
         polynomial, solveAtExpansion, buildOptions);
     orthogonalizationSec_ = wcaweBuild_.orthogonalizationSec;
+    if (wcaweBuild_.terminationReason == fastsweep::WcaweTerminationReason::SolverFailure) {
+        throw std::runtime_error("WCAWE at " + std::to_string(expansionFrequencyHz)
+            + " Hz, RHS " + std::to_string(wcaweBuild_.achievedOrder + 1)
+            + ": " + wcaweBuild_.terminationMessage);
+    }
 
     romDim_ = wcaweBuild_.achievedOrder;
     deflatedColumns_ = options_.order - romDim_;
@@ -244,9 +236,28 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
             "WcaweSweep: paper WCAWE recurrence produced no usable basis");
     }
 
+    if (options_.checkMoments) {
+        const auto moments = fastsweep::PolynomialMomentRecurrence::generatePolynomialMoments(
+            static_cast<std::size_t>(romDim_), polynomial.rhsCoefficientAt,
+            polynomial.applyHigherOrder, solveAtExpansion);
+        fullMomentProjectionError_ = 0.0;
+        for (const auto& moment : moments) {
+            auto remainder = moment;
+            for (const auto& v : wcaweBuild_.basis) {
+                const auto coefficient = fastsweep::hdot(v, moment);
+                for (std::size_t i = 0; i < moment.size(); ++i) remainder[i] -= coefficient * v[i];
+            }
+            fullMomentProjectionError_ = std::max(fullMomentProjectionError_,
+                fastsweep::norm2(remainder) / std::max(fastsweep::norm2(moment), 1.0e-300));
+        }
+        if (fullMomentProjectionError_ > 1.0e-8) {
+            throw std::runtime_error("WCAWE failed the independent full-order moment projection check");
+        }
+    }
     const auto projectionStarted = std::chrono::steady_clock::now();
     model_.build(project_, affine_, portModeSolver_,
                  std::move(wcaweBuild_.basis), portVectors);
+    model_.setPolynomials({std::move(series)});
     romProjectionSec_ = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - projectionStarted).count();
     ready_ = true;

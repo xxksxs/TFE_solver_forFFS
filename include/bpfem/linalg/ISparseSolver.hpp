@@ -33,6 +33,10 @@ public:
                               const std::vector<std::complex<double>>& b,
                               const SolverConfig& cfg = {}) = 0;
 
+    // Scope optional numerical preparation to a single immutable matrix.
+    virtual void beginMatrix(const SparseMatrix&) {}
+    virtual void endMatrix() noexcept {}
+
     // When the caller knows the sparsity pattern stays constant across solves
     // (typical for frequency sweeps with a fixed mesh + DOF map), enabling
     // this lets direct backends reuse the symbolic factorization. Iterative

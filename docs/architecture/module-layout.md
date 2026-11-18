@@ -48,9 +48,9 @@ src/main.cpp               轻量入口，调用 fem::runApplication
 - **`linalg`**：稀疏矩阵存储 (`SparseMatrix`)、抽象求解器 (`ISparseSolver`) 和抽象
   预条件 (`IPreconditioner`)、具体后端 (`PardisoBackend` / `BiCGStabBackend` /
   `PreconJacobi`)。CMake 宏 `BPFEM_USE_MKL` 仅在 `factory/SparseSolverFactory.cpp`
-  内部决定 Auto 路径选择，其它代码不再直接 `#ifdef`。
+  内部参与 Auto 路由。后端及端口本征求解也有各自的编译条件。
 - **`sweep`**：扫频策略抽象。`DirectSweep` (per-freq assemble + solve)；
-  `AlpsSweep` (block Krylov MOR)。`SweepContext` 携带一个 `onFieldSolved`
+  `AlpsSweep`（单展开点双边 Lanczos–Padé）以及 AWE、GAWE、MGAWE 和 WCAWE。`SweepContext` 携带一个 `onFieldSolved`
   回调让 Application 提供 VTU 写出钩子，避免 Sweep 与 OutputWriter 直接耦合。
 - **`factory`**：根据 `Options` 实例化具体策略。**唯一**包含 `BPFEM_USE_MKL`
   分支的求解器路由代码就在这里。

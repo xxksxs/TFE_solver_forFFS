@@ -1,6 +1,7 @@
 #include "bpfem/sweep/DirectSweep.hpp"
 
 #include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 
 #include <chrono>
 #include <complex>
@@ -57,6 +58,9 @@ SweepResult DirectSweep::run(const std::vector<double>& frequencies,
         ctx.log.info("  solving (this may take seconds for direct factorization)...");
         const auto t2 = clk::now();
         SolveResult result = ctx.solver.solve(matrix, rhs, solverCfg);
+        if (result.status == SolveStatus::Unchecked) {
+            linalg::checkResidual(matrix, rhs, solverCfg.tolerance, result);
+        }
         const auto t3 = clk::now();
         const double solveSec = std::chrono::duration<double>(t3 - t2).count();
         ctx.log.info("  solve:    " + formatSec(solveSec)
@@ -64,11 +68,11 @@ SweepResult DirectSweep::run(const std::vector<double>& frequencies,
                      + ", residual=" + std::to_string(result.residual));
 
         // 3. Extract S parameters from the solved field.
-        out.points.push_back(ctx.extractor.extract(f, result.field));
         if (ctx.onFrequencyStat) {
-            ctx.onFrequencyStat(f, assembleSec, solveSec,
-                                result.iterations, result.residual);
+            ctx.onFrequencyStat(f, assembleSec, solveSec, result);
         }
+        linalg::requireConverged(result, ctx.solver.name());
+        out.points.push_back(ctx.extractor.extract(f, result.field));
         if (ctx.onFieldSolved) {
             ctx.onFieldSolved(f, result.field);
         }

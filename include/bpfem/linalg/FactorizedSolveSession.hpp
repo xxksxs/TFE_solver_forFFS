@@ -2,6 +2,7 @@
 
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,13 +24,26 @@ public:
           factorized_(dynamic_cast<IFactorizedSparseSolver*>(&solver)) {
         if (factorized_ != nullptr) {
             factorized_->factorize(matrix_, config_);
+        } else {
+            solver_.beginMatrix(matrix_);
+        }
+    }
+
+    FactorizedSolveSession(const FactorizedSolveSession&) = delete;
+    FactorizedSolveSession& operator=(const FactorizedSolveSession&) = delete;
+
+    ~FactorizedSolveSession() {
+        if (factorized_ == nullptr) {
+            solver_.endMatrix();
         }
     }
 
     // 求解一个 RHS；直接后端使用已有数值因子，迭代后端保持旧行为。
     SolveResult solve(const std::vector<std::complex<double>>& rhs) {
         if (factorized_ == nullptr) {
-            return solver_.solve(matrix_, rhs, config_);
+            SolveResult result = solver_.solve(matrix_, rhs, config_);
+            updateResidual(rhs, result);
+            return result;
         }
         SolveResult result = factorized_->solveFactorized(rhs, config_);
         if (computeResidual_) {
@@ -72,15 +86,9 @@ private:
     // 由原始稀疏矩阵计算相对残差，避免依赖求解器内部工作数组。
     void updateResidual(const std::vector<std::complex<double>>& rhs,
                         SolveResult& result) const {
-        const auto ax = matrix_.multiply(result.field);
-        double residualSquared = 0.0;
-        double rhsSquared = 0.0;
-        for (std::size_t i = 0; i < rhs.size(); ++i) {
-            residualSquared += std::norm(ax[i] - rhs[i]);
-            rhsSquared += std::norm(rhs[i]);
+        if (result.status == SolveStatus::Unchecked) {
+            checkResidual(matrix_, rhs, config_.tolerance, result);
         }
-        result.residual = std::sqrt(residualSquared)
-            / std::max(std::sqrt(rhsSquared), 1.0e-300);
     }
 
     ISparseSolver& solver_;

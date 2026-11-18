@@ -6,6 +6,7 @@
 #include "bpfem/linalg/ISparseSolver.hpp"
 
 #include <complex>
+#include <functional>
 #include <vector>
 
 namespace fem::fastsweep {
@@ -14,7 +15,42 @@ class PolynomialPortMomentBuilder {
 public:
     using Complex = std::complex<double>;
 
-    // ALPS/WCAWE 共用的无损 P1 系统：A(t)=A0+t*A1，b(t)=b0+t*b1。
+    enum class Variable { LambdaShift, WavenumberShift };
+
+    struct PortTaylorSeries {
+        double expansionHz = 0.0;
+        double lambda0 = 0.0;
+        double scale = 1.0;
+        Variable variable = Variable::LambdaShift;
+        std::vector<double> lambda;
+        std::vector<std::vector<double>> admittance;
+        std::vector<std::vector<Complex>> excitation;
+
+        double coordinate(double frequencyHz) const;
+    };
+
+    static PortTaylorSeries buildTaylorSeries(
+        const ProjectDefinition& project,
+        const PortModeSolver& modes,
+        const FEMAssembler::AffineSystem& affine,
+        double expansionHz,
+        int count,
+        Variable variable);
+
+    static std::vector<Complex> applyMatrixCoefficient(
+        const FEMAssembler::AffineSystem& affine,
+        const PortTaylorSeries& series,
+        const std::vector<std::vector<Complex>>& ports,
+        std::size_t order,
+        const std::vector<Complex>& x);
+
+    static std::vector<Complex> rhsCoefficient(
+        const PortTaylorSeries& series,
+        const std::vector<std::vector<Complex>>& ports,
+        std::size_t dimension,
+        std::size_t order);
+
+    // ALPS 共用的无损 P1 系统：A(t)=A0+t*A1，b(t)=b0+t*b1。
     struct LosslessLinearization {
         SparseMatrix matrixAtExpansion;
         std::vector<Complex> rhs0;
@@ -55,7 +91,10 @@ public:
         int momentCount,
         linalg::ISparseSolver& solver,
         const linalg::SolverConfig& solverConfig,
-        const std::vector<std::vector<Complex>>& portVectors);
+        const std::vector<std::vector<Complex>>& portVectors,
+        Variable variable = Variable::LambdaShift,
+        const std::function<bool(const SparseMatrix&, const std::vector<Complex>&)>& accept = {},
+        const std::function<void(const std::vector<Complex>&)>& onMoment = {});
 };
 
 }  // namespace fem::fastsweep

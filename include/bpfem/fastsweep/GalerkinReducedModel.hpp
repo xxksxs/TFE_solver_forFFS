@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
 
@@ -20,6 +21,9 @@ public:
                std::vector<std::vector<Complex>> basis,
                const std::vector<std::vector<Complex>>& portVectors);
 
+    void setPolynomials(std::vector<PolynomialPortMomentBuilder::PortTaylorSeries> polynomials,
+                        bool lastExpansionOnly = false);
+
     // 在指定频率评估 S 参数。
     SParameterPoint evaluate(double frequencyHz) const;
 
@@ -30,6 +34,8 @@ public:
     std::vector<Complex> reconstructField(double frequencyHz) const;
 
     // 返回 ROM 维度。
+    double relativeResidual(double frequencyHz) const;
+
     int dimension() const { return romDim_; }
 
     // 返回原始全阶自由度维度。
@@ -45,17 +51,27 @@ public:
     bool lastSolveSucceeded() const { return lastSolveSucceeded_; }
 
 private:
+    struct Coefficients {
+        double mass = 0.0;
+        std::vector<double> admittance;
+        std::vector<Complex> excitation;
+    };
+    const PolynomialPortMomentBuilder::PortTaylorSeries* polynomialAt(double frequencyHz) const;
+    Coefficients coefficientsAt(double frequencyHz) const;
+
     const ProjectDefinition* project_ = nullptr;
     const FEMAssembler::AffineSystem* affine_ = nullptr;
     const PortModeSolver* portModeSolver_ = nullptr;
 
     bool ready_ = false;
+    bool lastExpansionOnly_ = false;
     mutable bool lastSolveSucceeded_ = true;
     int romDim_ = 0;
     int fullDim_ = 0;
     int numProjectPorts_ = 0;
     int numVirtualPorts_ = 0;
 
+    std::vector<PolynomialPortMomentBuilder::PortTaylorSeries> polynomials_;
     std::vector<std::vector<Complex>> basis_;
     std::vector<Complex> Ktilde_;
     std::vector<Complex> Mtilde_;

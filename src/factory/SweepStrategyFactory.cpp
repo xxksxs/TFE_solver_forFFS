@@ -41,6 +41,7 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
         case SweepStrategy::Awe: {
             sweep::AweOptions aweOpts;
             aweOpts.order = options.aweOrder;
+            aweOpts.fieldPade = options.aweFieldPade;
             aweOpts.expansionFrequencyHz = options.aweExpansionFrequencyHz;
             return std::make_unique<sweep::AweSweep>(project, assembler, portModeSolver,
                                                      aweOpts);
@@ -57,6 +58,10 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
             sweep::MgaweOptions mgaweOpts;
             mgaweOpts.expansionPointCount = options.mgawePointCount;
             mgaweOpts.localOrder = options.mgaweOrder;
+            mgaweOpts.adaptive = options.mgaweAdaptive;
+            mgaweOpts.useLastPolynomial = options.mgawe2001;
+            mgaweOpts.expansions = options.mgaweExpansions;
+            mgaweOpts.polynomialProjection = true;
             mgaweOpts.dropTolerance = options.mgaweDropTolerance;
             return std::make_unique<sweep::MgaweSweep>(project, assembler, portModeSolver,
                                                        mgaweOpts);
@@ -64,6 +69,7 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
         case SweepStrategy::Wcawe: {
             sweep::WcaweOptions wcaweOpts;
             wcaweOpts.order = options.wcaweOrder;
+            wcaweOpts.checkMoments = options.wcaweCheckMoments;
             wcaweOpts.expansionFrequencyHz = options.wcaweExpansionFrequencyHz;
             wcaweOpts.dropTolerance = options.wcaweDropTolerance;
             return std::make_unique<sweep::WcaweSweep>(project, assembler, portModeSolver,

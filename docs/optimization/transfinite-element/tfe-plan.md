@@ -6,6 +6,8 @@
 
 旧 `bpfem::tfe::TransfinitePortBuilder`（实际是 APM）已重命名为 `bpfem::apm::AnalyticPortBuilder`。CLI `--port-method numerical` 已从用户接口移除（代码中 `PortModeSolver` 仍保留作为内部工具，但通过 CLI 不可达）。新模块 `bpfem::tfe::TransfiniteElementBuilder` 实现真正 TFE：**端口面网格抽取后做 H(curl) 多模数值本征解** + 多端口波端口算子并入。
 
+> 历史实施记录。当前 CLI 仍支持 `numerical`、`analytic`、`tfe`，现行行为见[工程参考](../../engineering-reference.md)。旧误差、HFSS 来源和验收阈值待按原始配置复核。比较命令中的三个同名 CSV 路径是历史示意，复跑须使用独立 `--out`。
+
 ## 0.1 端口模建立改为数值本征求解（2026-05 修订）
 
 早期的 TFE 实现（提交 §2 之前）虽然能并入多模，但模形状仍来自矩形波导的 *解析* 表达式 `e_t^{TE/TM,mn}(u, v)`，再做一次 L2 投影到端口面 FE 自由度上。这是"解析模 + 多模并入"的混合方案，不是教科书意义上的 TFE。

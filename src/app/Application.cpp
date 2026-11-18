@@ -15,6 +15,7 @@
 #include "bpfem/io/PortFaceResolver.hpp"
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 #include "bpfem/post/OutputWriter.hpp"
 #include "bpfem/post/ResultExtractor.hpp"
 #include "bpfem/sweep/ISweepStrategy.hpp"
@@ -84,6 +85,23 @@ void prepareCleanOutputDirectory(const std::filesystem::path& path) {
         std::filesystem::remove_all(path);
     }
     std::filesystem::create_directories(path);
+}
+
+void configurePardisoOutOfCore(const std::filesystem::path& outputDirectory) {
+    const auto scratch = std::filesystem::absolute(outputDirectory / "pardiso-ooc");
+    std::filesystem::create_directories(scratch);
+    const auto prefix = (scratch / "factors").string();
+#ifdef _WIN32
+    std::size_t existingLength = 0;
+    const int query = getenv_s(&existingLength, nullptr, 0, "MKL_PARDISO_OOC_FILE_NAME");
+    const int status = query != 0 ? query : existingLength != 0 ? 0
+        : _putenv_s("MKL_PARDISO_OOC_FILE_NAME", prefix.c_str());
+#else
+    const int status = setenv("MKL_PARDISO_OOC_FILE_NAME", prefix.c_str(), 0);
+#endif
+    if (status != 0) {
+        throw std::runtime_error("Could not configure PARDISO out-of-core files");
+    }
 }
 
 }  // namespace
@@ -174,6 +192,8 @@ Options parseOptions(int argc, char** argv) {
             if (options.alpsExpansionFrequencyHz <= 0.0) {
                 throw std::runtime_error("--alps-expansion must be > 0 Hz");
             }
+        } else if (arg == "--awe-field-pade") {
+            options.aweFieldPade = true;
         } else if (arg == "--awe-order") {
             options.aweOrder = std::stoi(requireValue(arg));
             if (options.aweOrder < 1) {
@@ -199,6 +219,17 @@ Options parseOptions(int argc, char** argv) {
             if (options.gaweDropTolerance <= 0.0) {
                 throw std::runtime_error("--gawe-drop-tolerance must be > 0");
             }
+        } else if (arg == "--mgawe-expansion") {
+            const double hz = std::stod(requireValue(arg));
+            const int order = std::stoi(requireValue(arg));
+            if (!std::isfinite(hz) || hz <= 0.0 || order < 1) {
+                throw std::runtime_error("--mgawe-expansion requires a positive frequency in Hz and order");
+            }
+            options.mgaweExpansions.emplace_back(hz, order);
+        } else if (arg == "--mgawe-2001") {
+            options.mgawe2001 = true;
+        } else if (arg == "--mgawe-adaptive") {
+            options.mgaweAdaptive = true;
         } else if (arg == "--mgawe-points") {
             options.mgawePointCount = std::stoi(requireValue(arg));
             if (options.mgawePointCount < 1) {
@@ -214,6 +245,8 @@ Options parseOptions(int argc, char** argv) {
             if (options.mgaweDropTolerance <= 0.0) {
                 throw std::runtime_error("--mgawe-drop-tolerance must be > 0");
             }
+        } else if (arg == "--wcawe-check-moments") {
+            options.wcaweCheckMoments = true;
         } else if (arg == "--wcawe-order") {
             options.wcaweOrder = std::stoi(requireValue(arg));
             if (options.wcaweOrder < 1) {
@@ -255,8 +288,43 @@ Options parseOptions(int argc, char** argv) {
                 options.linearSolver = LinearSolverKind::BiCGStab;
             } else if (m == "gmres") {
                 options.linearSolver = LinearSolverKind::Gmres;
+            } else if (m == "mumps") {
+                options.linearSolver = LinearSolverKind::Mumps;
             } else {
-                throw std::runtime_error("--linear-solver must be 'auto', 'direct', 'bicgstab', or 'gmres'");
+                throw std::runtime_error("--linear-solver must be auto, direct, bicgstab, gmres or mumps");
+            }
+        } else if (arg == "--pardiso-mode") {
+            const auto mode = requireValue(arg);
+            if (mode != "incore" && mode != "ooc") {
+                throw std::runtime_error("--pardiso-mode must be 'incore' or 'ooc'");
+            }
+            options.pardisoOutOfCore = mode == "ooc";
+        } else if (arg == "--mumps-mode") {
+            options.mumpsMode = requireValue(arg);
+            if (options.mumpsMode != "incore" && options.mumpsMode != "ooc"
+                && options.mumpsMode != "blr") {
+                throw std::runtime_error("--mumps-mode must be incore, ooc or blr");
+            }
+        } else if (arg == "--mumps-blr-tolerance") {
+            options.mumpsBlrTolerance = std::stod(requireValue(arg));
+            if (!(options.mumpsBlrTolerance > 0.0 && options.mumpsBlrTolerance < 1.0)) {
+                throw std::runtime_error("--mumps-blr-tolerance must be between 0 and 1");
+            }
+        } else if (arg == "--schwarz-local-solver") {
+            const auto value = requireValue(arg);
+            if (value != "pardiso" && value != "mumps") {
+                throw std::runtime_error("--schwarz-local-solver must be pardiso or mumps");
+            }
+            options.schwarzLocalMumps = value == "mumps";
+        } else if (arg == "--schwarz-subdomains") {
+            options.schwarzSubdomains = std::stoi(requireValue(arg));
+            if (options.schwarzSubdomains < 1) {
+                throw std::runtime_error("--schwarz-subdomains must be >= 1");
+            }
+        } else if (arg == "--schwarz-overlap") {
+            options.schwarzOverlap = std::stoi(requireValue(arg));
+            if (options.schwarzOverlap < 0) {
+                throw std::runtime_error("--schwarz-overlap must be >= 0");
             }
         } else if (arg == "--precon") {
             const std::string m = requireValue(arg);
@@ -266,9 +334,17 @@ Options parseOptions(int argc, char** argv) {
                 options.preconditioner = PreconditionerKind::Jacobi;
             } else if (m == "ilu0") {
                 options.preconditioner = PreconditionerKind::Ilu0;
+            } else if (m == "schwarz") {
+                options.preconditioner = PreconditionerKind::Schwarz;
             } else {
-                throw std::runtime_error("--precon must be 'none', 'jacobi', or 'ilu0'");
+                throw std::runtime_error("--precon must be none, jacobi, ilu0 or schwarz");
             }
+        } else if (arg == "--iterative-spmv") {
+            const auto value = requireValue(arg);
+            if (value != "native" && value != "mkl") {
+                throw std::runtime_error("--iterative-spmv must be native or mkl");
+            }
+            options.iterativeMklSpmv = value == "mkl";
         } else if (arg == "--gmres-restart") {
             options.gmresRestart = std::stoi(requireValue(arg));
             if (options.gmresRestart < 1) {
@@ -281,13 +357,18 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
                       << "                     [--sweep direct|alps|awe|gawe|mgawe|wcawe]\n"
                       << "                     [--alps-order 12] [--alps-krylov-order <deprecated-alias>] [--alps-expansion <Hz>]\n"
-                      << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"
+                      << "                     [--awe-order 8] [--awe-expansion <Hz>] [--awe-field-pade]\n"
                       << "                     [--gawe-order 12] [--gawe-expansion <Hz>] [--gawe-drop-tolerance 1e-10]\n"
-                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"
-                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12]\n"
+                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10] [--mgawe-adaptive|--mgawe-2001]\n"
+                      << "                     [--mgawe-expansion <Hz> <order>] (repeatable)\n"
+                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12] [--wcawe-check-moments]\n"
                       << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"
-                      << "                     [--linear-solver auto|direct|bicgstab|gmres] [--precon none|jacobi|ilu0]\n"
-                      << "                     [--gmres-restart 30]\n";
+                      << "                     [--linear-solver auto|direct|bicgstab|gmres|mumps]\n"
+                      << "                     [--precon none|jacobi|ilu0|schwarz] [--gmres-restart 30]\n"
+                      << "                     [--iterative-spmv native|mkl]\n"
+                      << "                     [--pardiso-mode incore|ooc] [--mumps-mode incore|ooc|blr]\n"
+                      << "                     [--mumps-blr-tolerance 1e-10] [--schwarz-subdomains 8]\n"
+                      << "                     [--schwarz-overlap 1] [--schwarz-local-solver pardiso|mumps]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("Unknown option: " + arg);
@@ -319,6 +400,7 @@ int runApplication(int argc, char** argv) {
     // returning non-zero.
     Logger log(std::cout);
     RunReport report;
+    std::vector<FrequencyStat> sweepStats;
     std::filesystem::path crashLogPath;
     std::filesystem::path runJsonPath;
     std::filesystem::path timingJsonPath;
@@ -331,6 +413,9 @@ int runApplication(int argc, char** argv) {
         const std::filesystem::path outputRoot = options.outDir;
         options.outDir = runOutputDirectory(options);
         prepareCleanOutputDirectory(options.outDir);
+        if (options.pardisoOutOfCore) {
+            configurePardisoOutOfCore(options.outDir);
+        }
 
         // Attach the tee log file before any further info() so every line is
         // captured in run.log.
@@ -479,6 +564,7 @@ int runApplication(int argc, char** argv) {
             switch (options.preconditioner) {
                 case PreconditionerKind::Jacobi: preconName = "Jacobi"; break;
                 case PreconditionerKind::Ilu0:   preconName = "ILU(0)"; break;
+                case PreconditionerKind::Schwarz: preconName = "Schwarz"; break;
                 case PreconditionerKind::None:   break;
             }
             log.info("Preconditioner: " + preconName);
@@ -496,7 +582,6 @@ int runApplication(int argc, char** argv) {
         // bulk S-parameter table, and (b) push a FrequencyStat into the JSON
         // sweep array. Field S parameters are filled in below after the
         // sweep returns, when sparams is in scope.
-        std::vector<FrequencyStat> sweepStats;
         sweepStats.reserve(frequencies.size());
 
         sweep::SweepContext sweepCtx{
@@ -512,13 +597,15 @@ int runApplication(int argc, char** argv) {
             };
         }
         sweepCtx.onFrequencyStat = [&](double f, double assembleSec, double solveSec,
-                                        int iterations, double residual) {
+                                        const SolveResult& result) {
             FrequencyStat fs;
             fs.frequencyHz = f;
             fs.assembleSec = assembleSec;
             fs.solveSec = solveSec;
-            fs.iterations = iterations;
-            fs.residual = residual;
+            fs.iterations = result.iterations;
+            fs.residual = result.residual;
+            fs.absoluteResidual = result.absoluteResidual;
+            fs.linearSolveStatus = linalg::solveStatusName(result.status);
             sweepStats.push_back(fs);
         };
 
@@ -538,13 +625,14 @@ int runApplication(int argc, char** argv) {
             report.factorizedRhsSolveCount = stats.factorizedRhsSolveCount;
             report.factorizedSolveCallCount = stats.factorizedSolveCallCount;
             report.batchRhsMax = stats.batchRhsMax;
+            report.estimatedSolverPeakKiB = stats.estimatedSolverPeakKiB;
             report.symbolicAnalysisSec = stats.symbolicAnalysisSec;
             report.numericFactorizationSec = stats.numericFactorizationSec;
             report.factorizedRhsSolveSec = stats.factorizedRhsSolveSec;
 
             std::ostringstream solverSummary;
             solverSummary << std::fixed << std::setprecision(6)
-                          << "PARDISO reuse: symbolic=" << stats.symbolicAnalysisCount
+                          << sparseSolver->name() << " reuse: symbolic=" << stats.symbolicAnalysisCount
                           << " (" << stats.symbolicAnalysisSec << " s), numeric="
                           << stats.numericFactorizationCount << " ("
                           << stats.numericFactorizationSec << " s), RHS="
@@ -561,11 +649,9 @@ int runApplication(int argc, char** argv) {
 
         // -------------------- S parameter recap table --------------------
         // Single-glance table for users skimming the log. Tagged "[s-params]"
-        // so it is grep-able in scripts. Power-balance column |S11|^2+|S21|^2
-        // equals 1 for lossless networks at all frequencies; values far from
-        // 1.0 flag mode mismatch / numerical issues.
+        // so it is grep-able in scripts. The reported power covers only the displayed modes.
         log.info("S parameters (" + std::to_string(sparams.size())
-                 + " rows; |S11|^2+|S21|^2 should equal 1.0 for a lossless network):");
+                 + " rows; power sum covers the displayed modes):");
         log.stat("f(GHz)    |S11|dB     |S21|dB     |S11|^2+|S21|^2");
         for (std::size_t i = 0; i < sparams.size(); ++i) {
             const auto& p = sparams[i];
@@ -650,6 +736,7 @@ int runApplication(int argc, char** argv) {
         }
         if (!runJsonPath.empty()) {
             report.status = "fatal";
+            report.sweep = sweepStats;
             report.phases = collectPhaseSummaries(log);
             const auto memFinal = queryProcessMemory();
             if (memFinal.peakBytes > 0) {

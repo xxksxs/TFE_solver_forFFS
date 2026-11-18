@@ -15,6 +15,9 @@ public:
     GmresBackend() = default;
 
     void setPreconditioner(std::shared_ptr<IPreconditioner> precon);
+    void beginMatrix(const SparseMatrix& matrix) override { solver_.beginMatrix(matrix); }
+    void endMatrix() noexcept override { solver_.endMatrix(); }
+    void setMklSpmv(bool enabled) { solver_.setMklSpmv(enabled); }
     void setRestartLength(int m) { solver_.setRestartLength(m); }
 
     SolveResult solve(const SparseMatrix& A,

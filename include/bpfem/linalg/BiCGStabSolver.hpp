@@ -2,6 +2,7 @@
 
 #include "bpfem/core/Types.hpp"
 #include "bpfem/linalg/IPreconditioner.hpp"
+#include "bpfem/linalg/IterativeOperator.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
 
 #include <complex>
@@ -35,6 +36,9 @@ public:
     // x = M^{-1} y, but in code this is implemented in place with two
     // preconditioner applies per iteration -- one on p, one on s.
     void setPreconditioner(std::shared_ptr<linalg::IPreconditioner> precon);
+    void beginMatrix(const SparseMatrix& matrix);
+    void endMatrix() noexcept;
+    void setMklSpmv(bool enabled) { useMklSpmv_ = enabled; }
 
     // Solve A x = b. Returns SolveResult with the final iterate, the
     // iteration count actually performed, and the relative residual
@@ -42,8 +46,7 @@ public:
     //   - residual <= tolerance
     //   - iter == maxIterations  (residual is whatever it was at that step)
     //   - numerical breakdown (rho, denom, omega, or t.t hits ~ 1e-30)
-    // The function never throws; the caller decides whether the returned
-    // residual is acceptable.
+    // Invalid inputs and preconditioner setup errors throw.
     SolveResult solve(const SparseMatrix& a,
                       const std::vector<std::complex<double>>& b,
                       int maxIterations,
@@ -51,9 +54,11 @@ public:
 
 private:
     static std::complex<double> dot(const std::vector<std::complex<double>>& a, const std::vector<std::complex<double>>& b);
-    static double norm(const std::vector<std::complex<double>>& x);
 
     std::shared_ptr<linalg::IPreconditioner> precon_;
+    const SparseMatrix* preparedMatrix_ = nullptr;
+    bool useMklSpmv_ = false;
+    std::unique_ptr<linalg::IterativeOperator> preparedOperator_;
 };
 
 }  // namespace fem

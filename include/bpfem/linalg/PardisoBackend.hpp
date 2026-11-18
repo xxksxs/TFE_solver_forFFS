@@ -18,7 +18,7 @@ namespace fem::linalg {
 // declare the class so headers compile, but the .cpp guards against use.
 class PardisoBackend : public ISparseSolver, public IFactorizedSparseSolver {
 public:
-    PardisoBackend();
+    explicit PardisoBackend(bool outOfCore = false);
 
     SolveResult solve(const SparseMatrix& A,
                       const std::vector<std::complex<double>>& b,
@@ -41,9 +41,10 @@ public:
 
     FactorizationStatistics factorizationStatistics() const override;
 
-    const char* name() const override { return "PARDISO"; }
+    const char* name() const override { return outOfCore_ ? "PARDISO OOC" : "PARDISO"; }
 
 private:
+    bool outOfCore_;
 #ifdef BPFEM_USE_MKL
     MklPardisoSolver solver_;
 #endif

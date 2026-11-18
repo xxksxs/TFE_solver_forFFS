@@ -1,3 +1,4 @@
+#include "bpfem/core/Constants.hpp"
 #include "bpfem/fastsweep/GalerkinReducedModel.hpp"
 #include "bpfem/fastsweep/LanczosPadeModel.hpp"
 #include "bpfem/fastsweep/LinearAlgebra.hpp"
@@ -319,6 +320,13 @@ void testPadeApproximant() {
                 "Pade denominator coefficient mismatch");
     requireNear(pade.evaluate(Complex(0.1, 0.0)), Complex(1.25, 0.0), 1.0e-14,
                 "Pade evaluation mismatch");
+
+    // [0/2] for 1/(1 - 2t + 3t²). The denominator's first row uses c[-1] = 0.
+    const auto subdiagonal = fem::fastsweep::PadeApproximant::build({1.0, 2.0, 1.0}, 0, 2);
+    requireNear(subdiagonal.denominator()[1], Complex(-2.0, 0.0), 1.0e-14,
+                "Subdiagonal Padé first coefficient mismatch");
+    requireNear(subdiagonal.denominator()[2], Complex(3.0, 0.0), 1.0e-14,
+                "Subdiagonal Padé second coefficient mismatch");
 }
 
 // 验证二阶双边 Lanczos 在完整二维空间中精确恢复传递函数和状态。
@@ -874,6 +882,33 @@ void testGalerkinReducedModel() {
             "Galerkin S21 is not finite");
     const auto field = model.reconstructField(1.0e9);
     require(field.size() == 2, "Galerkin reconstructed field size mismatch");
+
+    // A passive second port below cutoff still contributes the Direct j*k0 boundary term.
+    // A complex one-column basis makes V^T and V^H produce different answers.
+    const double f = 1.0e9;
+    const double k = 2.0 * fem::pi * f / fem::c0;
+    affine.portCutoffSquared[1] = 4.0 * k * k;
+    const Complex phase(0.0, 1.0);
+    const Complex expected = Complex(0.0, 2.0 * k)
+        * fem::powerNormalizationFactor(portModeSolver.solve(10), f);
+    // Choose K22=2 so the two j*k terms cancel and the projected matrix is -1.
+    affine.K.add(1, 1, 1.0);
+    model.build(project, affine, portModeSolver, {{1.0, phase}}, portVectors);
+    requireNear(model.solveReduced(f)[0], -expected, 1.0e-12,
+                "Galerkin transpose projection or cutoff admittance mismatch");
+
+    using Builder = fem::fastsweep::PolynomialPortMomentBuilder;
+    const auto series = Builder::buildTaylorSeries(project, portModeSolver, affine,
+        f, 4, Builder::Variable::WavenumberShift);
+    requireNear(series.admittance[1][0], k, 1.0e-14, "Cutoff port Taylor constant");
+    requireNear(series.admittance[1][1], k, 1.0e-14, "Cutoff port Taylor slope");
+    requireNear(series.admittance[1][2], 0.0, 1.0e-14, "Cutoff port Taylor curvature");
+    model.setPolynomials({series});
+    requireNear(model.solveReduced(f)[0], -expected, 1.0e-12,
+                "Taylor ROM does not match the midpoint full-order projection");
+    const double t = 1.0e-3;
+    const auto x = model.solveReduced(f * (1.0 + t))[0];
+    requireNear(x, -expected * (1.0 + t), 1.0e-11, "Taylor ROM off-center coefficients");
 }
 
 }  // namespace

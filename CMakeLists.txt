@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BPFEM_USE_MKL "Use Intel oneMKL PARDISO sparse direct solver" ON)
+option(BPFEM_USE_MUMPS "Enable the double-complex MUMPS backend" OFF)
 option(BPFEM_OUTPUT_PARAVIEW
        "Emit ParaView-style VTK Lagrange tetrahedron VTUs (cell type 71). \
 When OFF (default), emit VisIt-friendly cells: VTK_TETRA (type 10) at order 1 \
@@ -49,9 +50,12 @@ add_library(bp_fem_core STATIC
     src/linalg/GmresBackend.cpp
     src/linalg/GmresSolver.cpp
     src/linalg/MklPardisoSolver.cpp
+    src/linalg/IterativeOperator.cpp
+    src/linalg/MumpsBackend.cpp
     src/linalg/PardisoBackend.cpp
     src/linalg/PreconIlu0.cpp
     src/linalg/PreconJacobi.cpp
+    src/linalg/PreconSchwarz.cpp
     src/linalg/SparseMatrix.cpp
     src/post/OutputWriter.cpp
     src/post/ResultExtractor.cpp
@@ -83,6 +87,20 @@ if(BPFEM_USE_MKL)
     endif()
 endif()
 
+if(BPFEM_USE_MUMPS)
+    find_path(BPFEM_MUMPS_INCLUDE_DIR NAMES zmumps_c.h REQUIRED)
+    set(BPFEM_MUMPS_LIBRARIES "" CACHE STRING
+        "Link libraries for a sequential ZMUMPS build, including dependencies")
+    set(BPFEM_MUMPS_RUNTIME_DLLS "" CACHE STRING
+        "Runtime DLL paths for the selected ZMUMPS build on Windows")
+    if(NOT BPFEM_MUMPS_LIBRARIES)
+        message(FATAL_ERROR "Set BPFEM_MUMPS_LIBRARIES to the sequential ZMUMPS libraries and dependencies.")
+    endif()
+    target_compile_definitions(bp_fem_core PUBLIC BPFEM_USE_MUMPS)
+    target_include_directories(bp_fem_core PRIVATE "${BPFEM_MUMPS_INCLUDE_DIR}")
+    target_link_libraries(bp_fem_core PRIVATE ${BPFEM_MUMPS_LIBRARIES})
+endif()
+
 add_executable(bp_fem_solver src/main.cpp)
 target_link_libraries(bp_fem_solver PRIVATE bp_fem_core)
 
@@ -93,6 +111,51 @@ add_test(NAME fastsweep_tests COMMAND fastsweep_tests)
 add_executable(io_parser_tests tests/io_parser_tests.cpp)
 target_link_libraries(io_parser_tests PRIVATE bp_fem_core)
 add_test(NAME io_parser_tests COMMAND io_parser_tests)
+add_executable(sparse_solver_tests tests/sparse_solver_tests.cpp)
+target_link_libraries(sparse_solver_tests PRIVATE bp_fem_core)
+add_test(NAME sparse_solver_tests COMMAND sparse_solver_tests)
+
+set(_solver_runtime_files)
+if(WIN32 AND BPFEM_USE_MKL AND MKL_FOUND AND NOT MKL_LINK STREQUAL "static")
+    # MKL loads architecture-specific kernels at runtime. They are not all
+    # visible in the executable's import table.
+    set(_mkl_runtime_stems
+        mkl_core mkl_def mkl_mc3 mkl_avx2 mkl_avx512
+        mkl_vml_def mkl_vml_mc3 mkl_vml_avx2 mkl_vml_avx512 mkl_vml_cmpt)
+    if(MKL_LINK STREQUAL "sdl")
+        list(APPEND _mkl_runtime_stems mkl_rt mkl_sequential mkl_intel_thread mkl_tbb_thread)
+    else()
+        list(APPEND _mkl_runtime_stems "mkl_${MKL_THREADING}")
+    endif()
+    foreach(_stem IN LISTS _mkl_runtime_stems)
+        file(GLOB _matches "${MKL_DLL_DIR}/${_stem}.*.dll")
+        if(_matches)
+            list(SORT _matches COMPARE NATURAL ORDER DESCENDING)
+            list(GET _matches 0 _runtime)
+            list(APPEND _solver_runtime_files "${_runtime}")
+        endif()
+    endforeach()
+    if(OMP_DLL_DIR AND EXISTS "${OMP_DLL_DIR}/libiomp5md.dll")
+        list(APPEND _solver_runtime_files "${OMP_DLL_DIR}/libiomp5md.dll")
+    endif()
+    if(TARGET TBB::tbb)
+        list(APPEND _solver_runtime_files "$<TARGET_FILE:TBB::tbb>")
+    endif()
+endif()
+if(WIN32 AND BPFEM_USE_MUMPS)
+    list(APPEND _solver_runtime_files ${BPFEM_MUMPS_RUNTIME_DLLS})
+endif()
+if(_solver_runtime_files)
+    add_custom_target(bpfem_solver_runtime
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:bp_fem_solver>"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            ${_solver_runtime_files} "$<TARGET_FILE_DIR:bp_fem_solver>"
+        VERBATIM)
+    add_dependencies(bp_fem_solver bpfem_solver_runtime)
+    add_dependencies(fastsweep_tests bpfem_solver_runtime)
+    add_dependencies(io_parser_tests bpfem_solver_runtime)
+    add_dependencies(sparse_solver_tests bpfem_solver_runtime)
+endif()
 
 # Logger uses GetProcessMemoryInfo (Psapi) on Windows for the working-set /
 # peak-memory counters in the run summary. Link the import library that
@@ -107,9 +170,11 @@ if(MSVC)
     target_compile_options(bp_fem_solver PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(fastsweep_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(io_parser_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_compile_options(sparse_solver_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
 else()
     target_compile_options(bp_fem_core PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(bp_fem_solver PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(fastsweep_tests PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(io_parser_tests PRIVATE -Wall -Wextra -pedantic)
+    target_compile_options(sparse_solver_tests PRIVATE -Wall -Wextra -pedantic)
 endif()

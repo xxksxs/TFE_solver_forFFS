@@ -111,6 +111,8 @@ const char* wcaweTerminationReasonName(WcaweTerminationReason reason) {
             return "near_singular_upper_triangular_factor";
         case WcaweTerminationReason::SolverFailure:
             return "solver_failure";
+        case WcaweTerminationReason::ToleranceExceeded:
+            return "tolerance_exceeded";
         case WcaweTerminationReason::NonFiniteValue:
             return "non_finite_value";
     }
@@ -230,6 +232,11 @@ WcaweBuildResult PolynomialWcaweRecurrence::build(
         }
 
         const double residual = recurrenceResidual(model, candidate, rhs);
+        if (!std::isfinite(residual) || residual > options.recurrenceTolerance) {
+            result.terminationReason = WcaweTerminationReason::ToleranceExceeded;
+            result.terminationMessage = "Relative recurrence residual exceeds tolerance at order " + std::to_string(n);
+            break;
+        }
         const auto orthogonalizationStarted = std::chrono::steady_clock::now();
         const WcaweAppendResult append = builder.appendCandidate(candidate);
         result.orthogonalizationSec += std::chrono::duration<double>(
@@ -248,6 +255,9 @@ WcaweBuildResult PolynomialWcaweRecurrence::build(
             break;
         }
 
+        if (append.orthogonalityError > options.orthogonalityTolerance) {
+            throw std::runtime_error("WCAWE basis orthogonality exceeds tolerance at order " + std::to_string(n));
+        }
         const double diagonal = append.diagonalAbs;
         result.minUpperDiagonalAbs = std::min(result.minUpperDiagonalAbs, diagonal);
         double maxDiagonal = 0.0;

@@ -9,6 +9,7 @@
 #include "bpfem/sweep/ISweepStrategy.hpp"
 
 #include <complex>
+#include <utility>
 #include <vector>
 
 namespace fem::sweep {
@@ -16,6 +17,10 @@ namespace fem::sweep {
 struct MgaweOptions {
     // Number of expansion points distributed over the requested sweep band.
     int expansionPointCount = 3;
+    bool adaptive = false;
+    bool useLastPolynomial = false;
+    std::vector<std::pair<double, int>> expansions;
+    bool polynomialProjection = false;
 
     // Local AWE moment vectors generated per expansion point before global
     // orthogonalization/deflation.
@@ -55,14 +60,11 @@ public:
     double lastRomProjectionSec() const { return romProjectionSec_; }
 
 private:
-    std::vector<std::vector<Complex>> buildLocalMoments(
-        double expansionFrequencyHz,
-        linalg::ISparseSolver& solver,
-        const linalg::SolverConfig& solverConfig,
-        const std::vector<std::vector<Complex>>& portVectors) const;
-
     bool appendIfIndependent(std::vector<Complex>&& w);
     void projectReducedModel(const std::vector<std::vector<Complex>>& portVectors);
+    int build(std::vector<double>& expansionFrequencies,
+              const std::vector<double>& sweepFrequencies,
+              linalg::ISparseSolver& solver, const linalg::SolverConfig& solverConfig);
     std::vector<Complex> solveReduced(double frequencyHz) const;
     const PortMode& virtualPortMode(int virtualPortIndex) const;
 
@@ -84,6 +86,10 @@ private:
     FEMAssembler::AffineSystem affine_;
     std::vector<std::vector<Complex>> basis_;
     fastsweep::GalerkinReducedModel model_;
+    std::vector<fastsweep::PolynomialPortMomentBuilder::PortTaylorSeries> polynomials_;
+    std::vector<int> localOrders_;
+    double maxRelativeResidual_ = 0.0;
+    bool adaptiveConverged_ = false;
 };
 
 }  // namespace fem::sweep

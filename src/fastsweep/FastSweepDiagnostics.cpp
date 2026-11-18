@@ -33,7 +33,7 @@ double maxPassivityError(const std::vector<SParameterPoint>& points) {
         const double s11 = std::abs(point.s11);
         const double s21 = std::abs(point.s21);
         maxError = std::max(
-            maxError, std::abs(s11 * s11 + s21 * s21 - 1.0));
+            maxError, s11 * s11 + s21 * s21 - 1.0);
     }
     return maxError;
 }
@@ -60,12 +60,31 @@ bool writeDiagnosticsJson(const std::filesystem::path& path,
         output << d.expansionFrequenciesHz[index];
     }
     output << "],\n";
+    output << "  \"model\": ";
+    writeJsonString(output, d.model);
+    output << ",\n";
+    output << "  \"local_orders\": [";
+    for (std::size_t i = 0; i < d.localOrders.size(); ++i) {
+        if (i != 0) output << ", ";
+        output << d.localOrders[i];
+    }
+    output << "],\n";
+    output << "  \"stopping_reason\": ";
+    writeJsonString(output, d.stoppingReason);
+    output << ",\n  \"maximum_relative_residual\": ";
+    if (d.maximumRelativeResidual >= 0.0 && std::isfinite(d.maximumRelativeResidual)) output << d.maximumRelativeResidual;
+    else output << "null";
+    output << ",\n  \"full_moment_projection_error\": ";
+    if (d.fullMomentProjectionError >= 0.0 && std::isfinite(d.fullMomentProjectionError)) output << d.fullMomentProjectionError;
+    else output << "null";
+    output << ",\n";
     output << "  \"requested_order\": " << d.requestedOrder << ",\n";
     output << "  \"rom_dimension\": " << d.romDimension << ",\n";
     output << "  \"retained_columns\": " << d.retainedColumns << ",\n";
     output << "  \"deflated_columns\": " << d.deflatedColumns << ",\n";
     output << "  \"basis_orthogonality_error\": "
            << d.basisOrthogonalityError << ",\n";
+    output << "  \"pade_coefficient_matching_error\": " << d.padeCoefficientMatchingError << ",\n";
     output << "  \"pade_input_pivot_ratio\": "
            << d.padeInputPivotRatio << ",\n";
     output << "  \"pade_output_pivot_ratio\": "
