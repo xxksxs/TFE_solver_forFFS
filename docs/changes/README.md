@@ -6,6 +6,7 @@
 
 - [2026-11-18 新增 Agent 快速接手指南](2026-11-18-agent-handoff.md)
 - [2026-11-18 文档体系重构](2026-11-18-documentation-restructure.md)
+- [2026-11-18 混合精度 GMRES 与报告容差](2026-11-18-iterative-mixed-precision.md)
 
 ## 模板
 

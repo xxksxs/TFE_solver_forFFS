@@ -26,6 +26,10 @@ public:
     virtual void setup(const SparseMatrix& A) = 0;
     virtual void clear() noexcept {}
 
+    // GMRES must retain each M^{-1}v when apply() does not preserve a
+    // linear combination to the arithmetic precision of the outer solver.
+    virtual bool requiresFlexibleGmres() const { return false; }
+
     // y = M^{-1} x. y is resized to x.size() if needed.
     virtual void apply(const std::vector<std::complex<double>>& x,
                        std::vector<std::complex<double>>& y) const = 0;

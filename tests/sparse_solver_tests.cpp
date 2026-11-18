@@ -1,4 +1,7 @@
 #include "bpfem/linalg/BiCGStabBackend.hpp"
+#include "bpfem/app/Application.hpp"
+#include "bpfem/core/RunEnvironment.hpp"
+#include "bpfem/core/RunReport.hpp"
 #include "bpfem/linalg/FactorizedSolveSession.hpp"
 #include "bpfem/linalg/GmresBackend.hpp"
 #include "bpfem/linalg/IterativeOperator.hpp"
@@ -30,6 +33,48 @@ void require(bool condition, const char* message) {
         throw std::runtime_error(message);
     }
 }
+
+void testToleranceReport() {
+    Options options;
+    options.tolerance = 1e-7;
+    options.mumpsBlrTolerance = 1.23456789012345e-10;
+    RunReport report;
+    fillReportFromEnvironment(report, RunEnvironment{}, options);
+    int checked = 0;
+    for (const auto& [key, value] : report.options) {
+        if (key == "tolerance") {
+            require(std::stod(value) == options.tolerance, "Linear tolerance did not round trip");
+            ++checked;
+        } else if (key == "mumpsBlrTolerance") {
+            require(std::stod(value) == options.mumpsBlrTolerance, "BLR tolerance did not round trip");
+            ++checked;
+        }
+    }
+    require(checked == 2, "Missing reported tolerance");
+}
+
+#ifdef BPFEM_USE_MKL
+void testMixedPrecisionGmres(const SparseMatrix& matrix, const Vector& expected) {
+    GmresBackend solver;
+    solver.setPreconditioner(std::make_shared<PreconPardisoSingle>());
+    const SolverConfig config{30, 1e-12};
+    {
+        FactorizedSolveSession prepared(solver, matrix, config);
+        const auto rhs = matrix.multiply(expected);
+        const auto results = prepared.solveBatch({rhs, rhs});
+        for (const auto& result : results) {
+            require(result.status == SolveStatus::Converged && result.residual <= config.tolerance,
+                    "Mixed precision iteration did not meet the original matrix tolerance");
+            require(result.iterations > 1, "Expected a correction to the single precision solve");
+        }
+    }
+    auto next = matrix;
+    next.add(0, 0, {0.5, 0.9});
+    const auto result = solver.solve(next, next.multiply(expected), config);
+    require(result.status == SolveStatus::Converged && result.residual <= config.tolerance,
+            "Mixed precision preconditioner must rebuild for changed coefficients");
+}
+#endif
 
 SparseMatrix testMatrix() {
     SparseMatrix matrix(4);
@@ -91,7 +136,11 @@ void testIteration(const SparseMatrix& matrix) {
 
 int main() {
     try {
+        testToleranceReport();
         const auto matrix = testMatrix();
+#ifdef BPFEM_USE_MKL
+        testMixedPrecisionGmres(matrix, expected);
+#endif
         testIteration<GmresBackend>(matrix);
         testIteration<BiCGStabBackend>(matrix);
 #ifdef BPFEM_USE_MKL

@@ -5,6 +5,8 @@
 
 #include <cmath>
 #include <fstream>
+#include <charconv>
+#include <stdexcept>
 #include <ios>
 #include <iomanip>
 #include <sstream>
@@ -139,6 +141,15 @@ std::string optionValue(const RunReport& report, const std::string& key) {
     return {};
 }
 
+std::string formatOption(double value) {
+    char buffer[64];
+    const auto formatted = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    if (formatted.ec != std::errc{}) {
+        throw std::runtime_error("Cannot format a floating-point solver option");
+    }
+    return {buffer, formatted.ptr};
+}
+
 }  // namespace
 
 void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options) {
@@ -162,7 +173,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("maxIterations", std::to_string(options.maxIterations));
     add("basisOrder", std::to_string(options.basisOrder));
     add("fieldOutputOrder", std::to_string(options.fieldOutputOrder));
-    add("tolerance", std::to_string(options.tolerance));
+    add("tolerance", formatOption(options.tolerance));
     add("writeAllFields", options.writeAllFields ? "true" : "false");
     {
         std::string s = "direct";
@@ -182,13 +193,13 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));
     add("gaweOrder", std::to_string(options.gaweOrder));
     add("gaweExpansionFrequencyHz", std::to_string(options.gaweExpansionFrequencyHz));
-    add("gaweDropTolerance", std::to_string(options.gaweDropTolerance));
+    add("gaweDropTolerance", formatOption(options.gaweDropTolerance));
     add("mgawePointCount", std::to_string(options.mgawePointCount));
     add("mgaweOrder", std::to_string(options.mgaweOrder));
-    add("mgaweDropTolerance", std::to_string(options.mgaweDropTolerance));
+    add("mgaweDropTolerance", formatOption(options.mgaweDropTolerance));
     add("wcaweOrder", std::to_string(options.wcaweOrder));
     add("wcaweExpansionFrequencyHz", std::to_string(options.wcaweExpansionFrequencyHz));
-    add("wcaweDropTolerance", std::to_string(options.wcaweDropTolerance));
+    add("wcaweDropTolerance", formatOption(options.wcaweDropTolerance));
     add("portMethod",
         options.portMethod == PortMethod::Analytic    ? "analytic"
       : options.portMethod == PortMethod::Transfinite ? "tfe"
@@ -214,6 +225,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
             case PreconditionerKind::Jacobi: p = "jacobi"; break;
             case PreconditionerKind::Ilu0:   p = "ilu0"; break;
             case PreconditionerKind::Schwarz: p = "schwarz"; break;
+            case PreconditionerKind::PardisoSingle: p = "pardiso-single"; break;
             case PreconditionerKind::None:   p = "none"; break;
         }
         add("preconditioner", p);
@@ -222,7 +234,7 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("iterativeSpmv", options.iterativeMklSpmv ? "mkl" : "native");
     add("pardisoMode", options.pardisoOutOfCore ? "ooc" : "incore");
     add("mumpsMode", options.mumpsMode);
-    add("mumpsBlrTolerance", std::to_string(options.mumpsBlrTolerance));
+    add("mumpsBlrTolerance", formatOption(options.mumpsBlrTolerance));
     add("schwarzSubdomains", std::to_string(options.schwarzSubdomains));
     add("schwarzOverlap", std::to_string(options.schwarzOverlap));
     add("schwarzLocalSolver", options.schwarzLocalMumps ? "mumps" : "pardiso");

@@ -14,7 +14,8 @@
 
 namespace fem {
 // 初始化 PARDISO 控制参数；矩阵类型为复对称矩阵。
-MklPardisoSolver::MklPardisoSolver(bool outOfCore) : outOfCore_(outOfCore) {
+MklPardisoSolver::MklPardisoSolver(bool outOfCore, Precision precision)
+    : outOfCore_(outOfCore), precision_(precision) {
 #ifdef BPFEM_USE_MKL
     initializeParameters();
 #endif
@@ -34,13 +35,14 @@ void MklPardisoSolver::initializeParameters() {
     iparm_.fill(0);
     iparm_[0] = 1;
     iparm_[1] = 2;
-    iparm_[7] = 2;
+    iparm_[7] = precision_ == Precision::Single ? 0 : 2;
     iparm_[9] = 13;
     iparm_[10] = 1;
     iparm_[12] = 1;
     iparm_[17] = -1;
     iparm_[18] = -1;
     iparm_[26] = 1;
+    iparm_[27] = precision_ == Precision::Single ? 1 : 0;
     iparm_[34] = 1;
     if (outOfCore_) {
         iparm_[23] = 1;
@@ -66,7 +68,7 @@ void MklPardisoSolver::analyzePattern(
     MKL_INT n,
     const std::vector<int>& rowOffsets,
     const std::vector<int>& columnIndices,
-    std::vector<MKL_Complex16>& values) {
+    void* values) {
     n_ = n;
     ia_.assign(rowOffsets.begin(), rowOffsets.end());
     ja_.assign(columnIndices.begin(), columnIndices.end());
@@ -82,7 +84,7 @@ void MklPardisoSolver::analyzePattern(
     MKL_Complex16 ddum{0.0, 0.0};
 
     const auto started = std::chrono::steady_clock::now();
-    pardiso(pt_.data(), &maxfct, &mnum, &mtype, &phase, &n_, values.data(),
+    pardiso(pt_.data(), &maxfct, &mnum, &mtype, &phase, &n_, values,
             ia_.data(), ja_.data(), &idum, &nrhs, iparm_.data(), &msglvl,
             &ddum, &ddum, &error);
     const double elapsed = std::chrono::duration<double>(
@@ -123,6 +125,7 @@ void MklPardisoSolver::release() {
     ia_.clear();
     ja_.clear();
     factorValues_.clear();
+    singleFactorValues_.clear();
     n_ = 0;
     analyzed_ = false;
     factorized_ = false;
@@ -155,6 +158,17 @@ void MklPardisoSolver::factorize(const SparseMatrix& matrix) {
     throw std::runtime_error(
         "MKL PARDISO factorization was requested, but this binary was built without BPFEM_USE_MKL.");
 #else
+    if (precision_ == Precision::Single) {
+        factorizeTyped(matrix, singleFactorValues_);
+    } else {
+        factorizeTyped(matrix, factorValues_);
+    }
+#endif
+}
+
+#ifdef BPFEM_USE_MKL
+template<class Complex>
+void MklPardisoSolver::factorizeTyped(const SparseMatrix& matrix, std::vector<Complex>& values) {
     const MKL_INT n = static_cast<MKL_INT>(matrix.size());
     const auto& rowOffsets = matrix.rowOffsets();
     const auto& columnIndices = matrix.columnIndices();
@@ -165,14 +179,15 @@ void MklPardisoSolver::factorize(const SparseMatrix& matrix) {
         release();
     }
 
-    factorValues_.clear();
-    factorValues_.reserve(csrValues.size());
+    using Scalar = decltype(Complex{}.real);
+    values.clear();
+    values.reserve(csrValues.size());
     for (const auto& value : csrValues) {
-        factorValues_.push_back(MKL_Complex16{value.real(), value.imag()});
+        values.push_back({static_cast<Scalar>(value.real()), static_cast<Scalar>(value.imag())});
     }
 
     if (!samePattern) {
-        analyzePattern(n, rowOffsets, columnIndices, factorValues_);
+        analyzePattern(n, rowOffsets, columnIndices, values.data());
     }
 
     MKL_INT maxfct = 1;
@@ -183,14 +198,14 @@ void MklPardisoSolver::factorize(const SparseMatrix& matrix) {
     MKL_INT msglvl = 0;
     MKL_INT error = 0;
     MKL_INT idum = 0;
-    MKL_Complex16 ddum{0.0, 0.0};
+    Complex ddum{};
 
     factorized_ = false;
     iparm_[17] = -1;
     iparm_[18] = -1;
     const auto started = std::chrono::steady_clock::now();
     pardiso(pt_.data(), &maxfct, &mnum, &mtype, &phase, &n_,
-            factorValues_.data(), ia_.data(), ja_.data(), &idum, &nrhs,
+            values.data(), ia_.data(), ja_.data(), &idum, &nrhs,
             iparm_.data(), &msglvl, &ddum, &ddum, &error);
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
@@ -202,12 +217,12 @@ void MklPardisoSolver::factorize(const SparseMatrix& matrix) {
     }
     // phase=33 的迭代改进需要原始矩阵数值；phase=22 后重新装载输入值。
     for (std::size_t i = 0; i < csrValues.size(); ++i) {
-        factorValues_[i] = MKL_Complex16{csrValues[i].real(), csrValues[i].imag()};
+        values[i] = {static_cast<Scalar>(csrValues[i].real()), static_cast<Scalar>(csrValues[i].imag())};
     }
     factorized_ = true;
     ++statistics_.numericFactorizationCount;
-#endif
 }
+#endif
 
 // 使用当前数值因子执行单 RHS phase=33；实现统一委托给批量入口。
 SolveResult MklPardisoSolver::solveFactorized(
@@ -224,6 +239,18 @@ std::vector<SolveResult> MklPardisoSolver::solveFactorizedBatch(
     throw std::runtime_error(
         "MKL PARDISO batch solve was requested, but this binary was built without BPFEM_USE_MKL.");
 #else
+    if (precision_ == Precision::Single) {
+        return solveTyped(rhsList, singleFactorValues_, singleRhsValues_, singleSolutionValues_);
+    }
+    return solveTyped(rhsList, factorValues_, rhsValues_, solutionValues_);
+#endif
+}
+
+#ifdef BPFEM_USE_MKL
+template<class Complex>
+std::vector<SolveResult> MklPardisoSolver::solveTyped(
+    const std::vector<std::vector<std::complex<double>>>& rhsList,
+    std::vector<Complex>& matrix, std::vector<Complex>& b, std::vector<Complex>& x) {
     if (!factorized_) {
         throw std::runtime_error(
             "MKL PARDISO solveFactorizedBatch called before a successful factorize");
@@ -240,15 +267,14 @@ std::vector<SolveResult> MklPardisoSolver::solveFactorizedBatch(
 
     const MKL_INT nrhs = static_cast<MKL_INT>(rhsList.size());
     const std::size_t valueCount = static_cast<std::size_t>(n_) * rhsList.size();
-    rhsValues_.resize(valueCount);
-    solutionValues_.resize(valueCount);
-    auto& b = rhsValues_;
-    auto& x = solutionValues_;
+    b.resize(valueCount);
+    x.resize(valueCount);
+    using Scalar = decltype(Complex{}.real);
     for (std::size_t column = 0; column < rhsList.size(); ++column) {
         for (std::size_t row = 0; row < static_cast<std::size_t>(n_); ++row) {
             const auto value = rhsList[column][row];
             b[column * static_cast<std::size_t>(n_) + row] =
-                MKL_Complex16{value.real(), value.imag()};
+                Complex{static_cast<Scalar>(value.real()), static_cast<Scalar>(value.imag())};
         }
     }
 
@@ -266,7 +292,7 @@ std::vector<SolveResult> MklPardisoSolver::solveFactorizedBatch(
     }
     const auto started = std::chrono::steady_clock::now();
     pardiso(pt_.data(), &maxfct, &mnum, &mtype, &phase, &n_,
-            factorValues_.data(), ia_.data(), ja_.data(), &idum, &mutableNrhs,
+            matrix.data(), ia_.data(), ja_.data(), &idum, &mutableNrhs,
             iparm_.data(), &msglvl, b.data(), x.data(), &error);
     statistics_.factorizedRhsSolveSec += std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
@@ -292,8 +318,8 @@ std::vector<SolveResult> MklPardisoSolver::solveFactorizedBatch(
         }
     }
     return results;
-#endif
 }
+#endif
 
 // 显式清除当前符号分析和数值因子；累计统计保持不变。
 void MklPardisoSolver::clearFactorization() {

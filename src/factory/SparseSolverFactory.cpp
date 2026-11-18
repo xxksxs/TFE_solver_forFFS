@@ -27,6 +27,8 @@ std::shared_ptr<linalg::IPreconditioner> makePreconditioner(const Options& optio
             return std::make_shared<linalg::PreconJacobi>();
         case PreconditionerKind::Ilu0:
             return std::make_shared<linalg::PreconIlu0>();
+        case PreconditionerKind::PardisoSingle:
+            return std::make_shared<linalg::PreconPardisoSingle>();
         case PreconditionerKind::Schwarz: {
             linalg::PreconSchwarz::LocalSolverFactory createLocalSolver;
             if (options.schwarzLocalMumps) {
@@ -70,6 +72,10 @@ void warnPreconIgnored(PreconditionerKind kind, const char* backendName) {
 }  // namespace
 
 std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) {
+    if (options.preconditioner == PreconditionerKind::PardisoSingle
+        && options.linearSolver != LinearSolverKind::Gmres) {
+        throw std::invalid_argument("--precon pardiso-single requires --linear-solver gmres");
+    }
 #ifndef BPFEM_USE_MKL
     if (options.iterativeMklSpmv) {
         throw std::invalid_argument("--iterative-spmv mkl requires a build with Intel oneMKL");

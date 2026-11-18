@@ -55,7 +55,8 @@ enum class PreconditionerKind {
     None,
     Jacobi,
     Ilu0,
-    Schwarz
+    Schwarz,
+    PardisoSingle
 };
 
 struct Options {

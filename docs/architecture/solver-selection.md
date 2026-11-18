@@ -26,6 +26,7 @@
 - **`ilu0`**：零填充 ILU 因式分解。
 
 - **`schwarz`**：重叠子域预条件。局部后端由 `--schwarz-local-solver pardiso|mumps` 选择，要求相应构建支持。局部 MUMPS 仅支持 `incore` 或 `blr`。
+- **`pardiso-single`** 供 oneMKL 构建的 `--linear-solver gmres` 使用。以单精度全局复数对称因子作右预条件，外层采用双精度 flexible GMRES。每次 Arnoldi 使用的预条件向量保留到解更新，最终用原始双精度矩阵检查真实残差。同一展开点复用数值因子。详见 [混合精度 GMRES 验证](../changes/2026-11-18-iterative-mixed-precision.md)。
 
 以下是旧版 BP filter 试验记录。适用范围为当时的配置，详细参数待核实。
 
@@ -38,11 +39,11 @@
 
 预条件只对 `bicgstab` / `gmres` 生效。选中 PARDISO 或 MUMPS 时，工厂忽略预条件并输出警告。
 
-**当前推荐**：默认 PARDISO；GMRES + ILU(0) 框架作为后续 AMS 等更复杂预条件的 plug-in 接口保留，**不**作为现阶段 BP filter 求解路径推荐。
+默认使用 PARDISO。已验证的三模 BP filter 可显式指定 `--linear-solver gmres --precon pardiso-single`。ILU(0) 和原 Schwarz 配置在该算例上都曾未收敛。
 
 ### 扫频策略（`--sweep`）
 
-- **`direct`**（默认）：`sweep::DirectSweep`。每个频点重装配 + 直接求解 + 后处理。
+- **`direct`**（默认）：`sweep::DirectSweep`。每个频点重装配，调用选定的全阶线性后端，再后处理。
   唯一支持 per-frequency VTU 输出的路径。
 - **`alps`**：单点双边 Lanczos–Padé，见 [ALPS 专题](../optimization/alps-sweep/README.md)。
 - **`awe`、`gawe`、`mgawe`、`wcawe`**：详见[工程参考](../engineering-reference.md)和[公式复现](../optimization/awe-family/paper-reproduction.md)。

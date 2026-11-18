@@ -3,6 +3,7 @@
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
 #include "bpfem/linalg/MklPardisoSolver.hpp"
+#include "bpfem/linalg/IPreconditioner.hpp"
 
 namespace fem::linalg {
 
@@ -48,6 +49,20 @@ private:
 #ifdef BPFEM_USE_MKL
     MklPardisoSolver solver_;
 #endif
+};
+
+class PreconPardisoSingle final : public IPreconditioner {
+public:
+    PreconPardisoSingle();
+    void setup(const SparseMatrix& matrix) override;
+    void clear() noexcept override;
+    void apply(const std::vector<std::complex<double>>& input,
+               std::vector<std::complex<double>>& output) const override;
+    const char* name() const override { return "PARDISO single"; }
+    bool requiresFlexibleGmres() const override { return true; }
+
+private:
+    mutable MklPardisoSolver solver_{false, MklPardisoSolver::Precision::Single};
 };
 
 }  // namespace fem::linalg

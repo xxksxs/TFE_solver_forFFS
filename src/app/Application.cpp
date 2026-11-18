@@ -366,8 +366,10 @@ Options parseOptions(int argc, char** argv) {
                 options.preconditioner = PreconditionerKind::Ilu0;
             } else if (m == "schwarz") {
                 options.preconditioner = PreconditionerKind::Schwarz;
+            } else if (m == "pardiso-single") {
+                options.preconditioner = PreconditionerKind::PardisoSingle;
             } else {
-                throw std::runtime_error("--precon must be none, jacobi, ilu0 or schwarz");
+                throw std::runtime_error("--precon must be none, jacobi, ilu0, schwarz or pardiso-single");
             }
         } else if (arg == "--iterative-spmv") {
             const auto value = requireValue(arg);
@@ -397,7 +399,8 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--tfe-proxy-direct] [--tfe-subband-width HZ] (tfe-block with --sweep mgawe)\n"
                       << "                     [--tfe-exact-band LOW_HZ HIGH_HZ] (repeatable, tfe-block MGAWE)\n"
                       << "                     [--linear-solver auto|direct|bicgstab|gmres|mumps]\n"
-                      << "                     [--precon none|jacobi|ilu0|schwarz] [--gmres-restart 30]\n"
+                      << "                     [--precon none|jacobi|ilu0|schwarz|pardiso-single]\n"
+                      << "                     [--gmres-restart 30]\n"
                       << "                     [--iterative-spmv native|mkl]\n"
                       << "                     [--pardiso-mode incore|ooc] [--mumps-mode incore|ooc|blr]\n"
                       << "                     [--mumps-blr-tolerance 1e-10] [--schwarz-subdomains 8]\n"
@@ -637,6 +640,7 @@ int runApplication(int argc, char** argv) {
                 case PreconditionerKind::Jacobi: preconName = "Jacobi"; break;
                 case PreconditionerKind::Ilu0:   preconName = "ILU(0)"; break;
                 case PreconditionerKind::Schwarz: preconName = "Schwarz"; break;
+                case PreconditionerKind::PardisoSingle: preconName = "PARDISO single"; break;
                 case PreconditionerKind::None:   break;
             }
             log.info("Preconditioner: " + preconName);

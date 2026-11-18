@@ -126,6 +126,8 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
     std::vector<Complex> givensS(static_cast<std::size_t>(m), Complex(0.0, 0.0));
     std::vector<Complex> g(basisSize, Complex(0.0, 0.0));
     std::vector<Complex> preconScratch(n, Complex(0.0, 0.0));
+    const bool flexible = precon_ && precon_->requiresFlexibleGmres();
+    std::vector<std::vector<Complex>> Z(flexible ? static_cast<std::size_t>(m) : 0);
 
     int& iter = result.iterations;
     auto finish = [&](SolveStatus failure) {
@@ -159,7 +161,9 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
             ++iter;
 
             // w = A * M^{-1} v_j  (right preconditioning).
-            const auto& vjPrec = applyPrecon(V[static_cast<std::size_t>(j)], preconScratch);
+            const auto column = static_cast<std::size_t>(j);
+            auto& scratch = flexible ? Z[column] : preconScratch;
+            const auto& vjPrec = applyPrecon(V[column], scratch);
             std::vector<Complex> w = matrixOperator.multiply(vjPrec);
 
             // Modified Gram-Schmidt with one pass of re-orthogonalization.
@@ -247,14 +251,15 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
             y[static_cast<std::size_t>(i)] = sum / diag;
         }
 
-        // x_update = M^{-1} (V * y)
+        // Flexible GMRES uses the same preconditioned vectors as Arnoldi.
+        const auto& solutionBasis = flexible ? Z : V;
         std::vector<Complex> Vy(n, Complex(0.0, 0.0));
         for (int i = 0; i <= kf; ++i) {
             for (std::size_t k = 0; k < n; ++k) {
-                Vy[k] += y[static_cast<std::size_t>(i)] * V[static_cast<std::size_t>(i)][k];
+                Vy[k] += y[static_cast<std::size_t>(i)] * solutionBasis[static_cast<std::size_t>(i)][k];
             }
         }
-        const auto& update = applyPrecon(Vy, preconScratch);
+        const auto& update = flexible ? Vy : applyPrecon(Vy, preconScratch);
         for (std::size_t k = 0; k < n; ++k) {
             x[k] += update[k];
         }
