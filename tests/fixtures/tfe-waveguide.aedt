@@ -1,0 +1,17 @@
+Frequency='9.5GHz'
+RangeStart='9GHz'
+RangeEnd='10GHz'
+RangeCount=5
+$begin '1'
+ID=1
+BoundType='Wave Port'
+Faces(1)
+NumModes=2
+$end '1'
+$begin '2'
+ID=2
+BoundType='Wave Port'
+Faces(2)
+NumModes=2
+$end '2'
+SourceEntry(ID=1, Index=0, Terminal=false, Terminated=false, Magnitude='1W', Phase='0deg')

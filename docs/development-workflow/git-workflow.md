@@ -1,7 +1,6 @@
 # Git 仓库管理约定
 
-本文件说明本工程在本地 Git 仓库下的最小工作流。仓库根：`bp_filter/`，
-默认主分支：`main`。仓库目前为本地，未推送任何远端。
+仓库根目录为 `bp_filter/`，默认主分支为 `main`。发布前用 `git remote -v` 核对 `origin` 指向本项目的 GitHub 仓库。
 
 ## 仓库基础设施
 
@@ -24,7 +23,7 @@
 
 ## 分支策略
 
-- 现阶段单分支 `main`。
+- `main` 为默认集成分支。并行工作在隔离分支进行。
 - 新功能或重构超过一次 commit 的，开 `feature/<short-name>` 分支，merge 时用 `--no-ff` 保留拓扑：
 
   ```powershell
@@ -45,15 +44,12 @@
 - 想看仓库体积：`git count-objects -vH`；超过 50 MB 时检查是否误纳入大件。
 - 想看正在被 ignore 但你不确定的路径：`git check-ignore -v <path>`。
 
-## 推到远端（可选）
+## 发布到远端
 
-当前未配置 origin。如需推到 GitHub / GitLab 私服：
+完成[发布验收](../testing/release-validation.md)后，推送该次发布分支和对应附注标签。
 
 ```powershell
-git remote add origin <url>
-git push -u origin main
-git push origin --tags
+git push --atomic -u origin <release-branch> "refs/tags/<release-tag>"
 ```
 
-第一次推送前请再次确认 `.gitignore` 已经把所有大文件 / 结果目录排除，避免远端
-仓库被构建产物撑爆。
+推送前检查变更文件是否包含未授权的数据或临时产物。推送后用 `git ls-remote` 核对远端分支及标签指向。

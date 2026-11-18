@@ -14,14 +14,14 @@
 | 线性求解和预条件 | `src/factory/SparseSolverFactory.cpp`、`src/linalg/`、`tests/sparse_solver_tests.cpp` | [求解器选择](../architecture/solver-selection.md) |
 | 构建和验证 | `CMakeLists.txt`、`tests/` | [测试入口](../testing/README.md) |
 
-## 工作树快照 · 2026-11-18
+## 已接入功能
 
 以下是接手线索。每次开工以实际的 `git status`、源码和变更记录为准。
 
 - AWE 逐场 Padé、MGAWE 2001/自适应模式与高阶 WCAWE 已在工作树接入。WCAWE 的离线和在线共用一套多项式。做矩验证时使用 `--wcawe-check-moments`。做性能计时时关闭该验证并单独记其开销。
-- 当前 CLI 的 `tfe` 路径是在端口网格上求多个数值本征模并装配对应波端口项。教科书中的模态自由度替换和 Schur 推导在 TFE 专题中作为理论与设计参考。
-- 工作树含 MUMPS、Schwarz、MKL SpMV、PARDISO out-of-core 及稀疏求解器测试改动。先核对当前编译条件、依赖和测试结果。早期 BiCGSTAB/GMRES 的测量仅代表对应旧配置。
-- 项目有并行的未提交改动。提交、切换分支或集成之前，先确认这些改动的归属。历史测量不能代替当前构建验证。
+- `tfe` 在端口网格上求多个数值本征模，再装配波端口项。`tfe-block` 使用模态自由度替换，提供 Direct、分段二阶 MGAWE 和指定精确频段。
+- MUMPS、Schwarz、MKL SpMV、PARDISO 外存和混合精度 GMRES 由[求解器选择](../architecture/solver-selection.md)统一说明。根据构建组合复核依赖与测试。
+- 版本固化、发布门槛和复现配置见[发布验收规范](../testing/release-validation.md)。切换分支或集成前先核对其他任务在工作树里的改动。
 
 ## 最小复跑
 

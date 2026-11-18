@@ -1,7 +1,7 @@
 # 变更日志 (Changelog)
 
 本文件记录本工程的版本演进，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
-版本号采用 `YYYY.MM.DD-描述` 形式以方便追溯（项目尚未发布到外部，故未走 SemVer）。
+版本号采用 `YYYY.MM.DD-描述` 形式以方便追溯。
 
 ## [Unreleased]
 
@@ -10,6 +10,15 @@
 ### Changed
 
 ### Fixed
+
+---
+
+## [2026.11.18-tfe-solver] - 2026-11-18
+
+- 原生 TFE 端口迹替换、模态 S 参数和分段二阶 MGAWE，支持指定深谷区间内的精确求解。
+- 混合精度 flexible GMRES、串行 MUMPS 的外存与 BLR 路径。记录实际残差、退出状态及可回读的容差。
+- 对齐 AWE、MGAWE 和 WCAWE 的离线模型与公式，校准 WCAWE 迭代矩求解的容差。
+- 建立统一文档入口、Agent 接手指南和发布验收规范。对应结果见[联合验收](../changes/2026-11-18-solver-release-validation.md)。
 
 ---
 

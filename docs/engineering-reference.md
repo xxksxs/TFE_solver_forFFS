@@ -78,8 +78,8 @@ bp_fem_solver.exe `
 | `--basis-order` | `0` 为 Whitney/Nédélec 零阶棱元，`1` 为一阶层次棱元 |
 | `--max-sweep-points` | 从工程扫频中最多取多少个频点 |
 | `--port-method` | 数值端口、解析 TE10、全边多模端口或原生分块 TFE。分块接口见 [TFE 专题](optimization/transfinite-element/README.md)。 |
-| `--linear-solver` | 自动路由、PARDISO 直接法或迭代法 |
-| `--precon` | `none`、`jacobi`、`ilu0` 或 `schwarz`，只对迭代法生效 |
+| `--linear-solver` | 自动路由、PARDISO/MUMPS 直接法或迭代法 |
+| `--precon` | `none`、`jacobi`、`ilu0`、`schwarz`，或 oneMKL 构建下专供 GMRES 使用的 `pardiso-single`。见[求解器选择](architecture/solver-selection.md)。 |
 | `--sweep` | 选择直接扫频或快速扫频策略 |
 | `--write-all-fields` | 为每个频点写 VTU |
 | `--no-write-all-fields` | 只保留最后频点场，长扫频推荐 |

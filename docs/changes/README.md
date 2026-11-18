@@ -2,6 +2,7 @@
 
 每条记录对应一项可独立审查的变更。文件名为 `YYYY-MM-DD-主题.md`，同一任务的复测直接更新原记录。
 
+- [2026-11-18 TFE 与混合精度求解联合验收](2026-11-18-solver-release-validation.md)
 - [2026-11-18 原生 TFE 装配与 MGAWE 集成](2026-11-18-tfe-integration.md)
 
 - [2026-11-18 新增 Agent 快速接手指南](2026-11-18-agent-handoff.md)

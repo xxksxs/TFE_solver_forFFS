@@ -24,7 +24,7 @@
   频点使用精确 TFE Direct，区间外仍使用同一二阶代理。该选项不会加入额外频点。
   精确点记录各自的线性求解状态，并计入数值分解次数。
 
-集成验收的后端、IOStructure 全带和深谷结果见 [变更记录](../../changes/2026-11-18-tfe-integration.md)。
+后端、IOStructure 全带与深谷工程结果见[联合验收](../../changes/2026-11-18-solver-release-validation.md)，独立分支的历史验证见[TFE 集成记录](../../changes/2026-11-18-tfe-integration.md)。
 
 以下段落记录旧 `--port-method tfe` 的全边坐标多模波端口实现。
 
