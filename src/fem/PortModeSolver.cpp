@@ -411,6 +411,26 @@ PortMode PortModeSolver::computeMode(int faceId) const {
 }
 
 MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
+    return computeModes(faceId, count, nullptr, nullptr);
+}
+
+std::vector<WaveguideMode> PortModeSolver::computeWaveguideModes(
+    int faceId, int count, const std::unordered_set<int>& pecDofs) const {
+    std::vector<WaveguideMode> modes;
+    computeModes(faceId, count, &pecDofs, &modes);
+    std::stable_sort(modes.begin(), modes.end(), [](const auto& a, const auto& b) {
+        return a.trace.cutoffWavenumberSquared < b.trace.cutoffWavenumberSquared;
+    });
+    if (static_cast<int>(modes.size()) < count) {
+        throw std::runtime_error("Insufficient TE/TM trace resolution on face " + std::to_string(faceId));
+    }
+    modes.resize(static_cast<std::size_t>(count));
+    return modes;
+}
+
+MultiPortMode PortModeSolver::computeModes(int faceId, int count,
+                                         const std::unordered_set<int>* pecDofs,
+                                         std::vector<WaveguideMode>* waveguideModes) const {
     MultiPortMode multi;
     multi.faceId = faceId;
     multi.excitationModeIndex = 0;
@@ -439,6 +459,38 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
             const int bNode = tri.vertexIds[static_cast<std::size_t>(localPair[1])];
             ++portEdgeUseCounts[edgeKey(aNode, bNode)];
         }
+    }
+
+    if (waveguideModes) {
+        std::map<int, std::vector<int>> perimeter;
+        for (const auto& tri : triangles) {
+            for (int i = 0; i < 3; ++i) {
+                const int a = tri.vertexIds[i];
+                const int b = tri.vertexIds[(i + 1) % 3];
+                const int uses = portEdgeUseCounts.at(edgeKey(a, b));
+                if (uses > 2) throw std::runtime_error("Nonmanifold TFE port cross-section");
+                if (uses == 1) {
+                    perimeter[a].push_back(b);
+                    perimeter[b].push_back(a);
+                }
+            }
+        }
+        std::unordered_set<int> unvisited;
+        for (const auto& [node, neighbors] : perimeter) {
+            if (neighbors.size() != 2) throw std::runtime_error("Invalid TFE port perimeter");
+            unvisited.insert(node);
+        }
+        if (unvisited.empty()) throw std::runtime_error("Missing TFE port perimeter");
+        int node = *unvisited.begin();
+        std::vector<int> stack{node};
+        while (!stack.empty()) {
+            node = stack.back();
+            stack.pop_back();
+            if (!unvisited.erase(node)) continue;
+            const auto& neighbors = perimeter.at(node);
+            stack.insert(stack.end(), neighbors.begin(), neighbors.end());
+        }
+        if (!unvisited.empty()) throw std::runtime_error("TFE port with multiple perimeter loops is unsupported");
     }
 
     std::map<int, int> portIndexByGlobal;
@@ -470,10 +522,10 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
             const auto [zeroDof, firstDof] = edgeDofsForNodes(aNode, bNode);
             const int orientedA = aNode < bNode ? a : b;
             const int orientedB = aNode < bNode ? b : a;
-            if (zeroDof >= 0) {
+            if (zeroDof >= 0 && (!pecDofs || !pecDofs->count(zeroDof))) {
                 refs.push_back({portIndex(zeroDof), zeroDof, LocalDofKind::EdgeZero, {{orientedA, orientedB, -1}}, 1.0});
             }
-            if (topology_.basisOrder() >= 1 && firstDof >= 0) {
+            if (topology_.basisOrder() >= 1 && firstDof >= 0 && (!pecDofs || !pecDofs->count(firstDof))) {
                 refs.push_back({portIndex(firstDof), firstDof, LocalDofKind::EdgeFirst, {{orientedA, orientedB, -1}}, 1.0});
             }
         }
@@ -486,7 +538,7 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
             const auto faceDofs = topology_.faceFirstDofsForNodes(tri.vertexIds[0], tri.vertexIds[1], tri.vertexIds[2]);
             for (int i = 0; i < 2; ++i) {
                 const int dof = faceDofs[static_cast<std::size_t>(i)];
-                if (dof >= 0) {
+                if (dof >= 0 && (!pecDofs || !pecDofs->count(dof))) {
                     refs.push_back({portIndex(dof), dof, i == 0 ? LocalDofKind::FaceFirst0 : LocalDofKind::FaceFirst1, sortedLocal, 1.0});
                 }
             }
@@ -564,7 +616,7 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
             }
         }
     }
-    if (selectedIndices.empty()) {
+    if (selectedIndices.empty() && !waveguideModes) {
         // Pathological: keep at least the dominant entry so downstream code
         // gets a usable PortMode (matching legacy behavior).
         selectedIndices.push_back(order.front());
@@ -575,6 +627,12 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
         std::vector<double> dofs(n, 0.0);
         for (std::size_t i = 0; i < n; ++i) {
             dofs[i] = eigenvectors[i][selected];
+        }
+        if (waveguideModes) {
+            const auto pivot = std::max_element(dofs.begin(), dofs.end(), [](double a, double b) {
+                return std::abs(a) < std::abs(b);
+            });
+            if (*pivot < 0.0) for (double& value : dofs) value = -value;
         }
         auto massDofs = multiply(mass, dofs);
         double normM = 0.0;
@@ -598,6 +656,10 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
                 pm.couplingWeights.emplace_back(globalByPortIndex[i], massDofs[i]);
             }
         }
+        if (waveguideModes) {
+            waveguideModes->push_back({std::move(pm), false});
+            continue;
+        }
         for (std::size_t triIndex = 0; triIndex < triangles.size(); ++triIndex) {
             const auto& cache = triCache[triIndex];
             if (cache.area <= 1.0e-30) {
@@ -616,6 +678,87 @@ MultiPortMode PortModeSolver::computeMultiMode(int faceId, int count) const {
         multi.modes.push_back(std::move(pm));
     }
 
+    if (waveguideModes) {
+        // TM modes: P1 scalar Dirichlet functions and their exact discrete
+        // gradients. The gradient has only lowest-order edge coefficients
+        // even when the ambient H(curl) basis also has higher-order DOFs.
+        std::unordered_set<int> wallNodes;
+        std::map<int, int> indices;
+        for (const auto& tri : triangles) {
+            for (int i = 0; i < 3; ++i) {
+                const int a = tri.vertexIds[i];
+                const int b = tri.vertexIds[(i + 1) % 3];
+                indices.emplace(a, -1);
+                if (portEdgeUseCounts.at(edgeKey(a, b)) == 1 ||
+                    pecDofs->count(topology_.edgeZeroDofForNodes(a, b))) {
+                    wallNodes.insert(a);
+                    wallNodes.insert(b);
+                }
+            }
+        }
+        int scalarCount = 0;
+        for (auto& [node, index] : indices) {
+            if (!wallNodes.count(node)) index = scalarCount++;
+        }
+        if (scalarCount == 0) return multi;
+
+        Matrix scalarK = makeMatrix(scalarCount);
+        Matrix scalarM = makeMatrix(scalarCount);
+        std::map<int, std::pair<int, int>> gradientEdges;
+        for (std::size_t ti = 0; ti < triangles.size(); ++ti) {
+            const auto& tri = triangles[ti];
+            const auto& cache = triCache[ti];
+            for (int i = 0; i < 3; ++i) {
+                const int a = indices.at(tri.vertexIds[i]);
+                for (int j = 0; j < 3; ++j) {
+                    const int b = indices.at(tri.vertexIds[j]);
+                    if (a < 0 || b < 0) continue;
+                    scalarK[a][b] += cache.area * dot(cache.grad[i], cache.grad[j]);
+                    scalarM[a][b] += cache.area * (i == j ? 1.0 / 6.0 : 1.0 / 12.0);
+                }
+                const int v0 = tri.vertexIds[i];
+                const int v1 = tri.vertexIds[(i + 1) % 3];
+                const auto entry = portIndexByGlobal.find(topology_.edgeZeroDofForNodes(v0, v1));
+                if (entry != portIndexByGlobal.end()) {
+                    gradientEdges.emplace(entry->second,
+                        std::make_pair(indices.at(std::min(v0, v1)), indices.at(std::max(v0, v1))));
+                }
+            }
+        }
+        const auto [tmValues, tmVectors] = generalizedEigen(scalarK, scalarM);
+        std::vector<int> tmOrder(scalarCount);
+        std::iota(tmOrder.begin(), tmOrder.end(), 0);
+        std::stable_sort(tmOrder.begin(), tmOrder.end(), [&](int a, int b) {
+            return tmValues[a] < tmValues[b];
+        });
+        for (int j = 0; j < std::min(count, scalarCount); ++j) {
+            const int selected = tmOrder[j];
+            if (!(tmValues[selected] > 0.0)) {
+                throw std::runtime_error("Invalid TM eigenvalue on face " + std::to_string(faceId));
+            }
+            std::vector<double> gradient(n);
+            const auto value = [&](int i) { return i < 0 ? 0.0 : tmVectors[i][selected]; };
+            for (const auto& [edge, nodes] : gradientEdges) {
+                gradient[edge] = value(nodes.second) - value(nodes.first);
+            }
+            const auto pivot = std::max_element(gradient.begin(), gradient.end(), [](double a, double b) {
+                return std::abs(a) < std::abs(b);
+            });
+            if (*pivot < 0.0) for (double& entry : gradient) entry = -entry;
+            const auto overlap = multiply(mass, gradient);
+            const double norm = std::sqrt(std::inner_product(
+                gradient.begin(), gradient.end(), overlap.begin(), 0.0));
+            if (!(norm > 0.0)) throw std::runtime_error("Empty TM trace gradient");
+            PortMode mode;
+            mode.faceId = faceId;
+            mode.cutoffWavenumberSquared = tmValues[selected];
+            for (std::size_t i = 0; i < n; ++i) {
+                mode.edgeDofs.emplace_back(globalByPortIndex[i], gradient[i] / norm);
+                mode.couplingWeights.emplace_back(globalByPortIndex[i], overlap[i] / norm);
+            }
+            waveguideModes->push_back({std::move(mode), true});
+        }
+    }
     return multi;
 }
 

@@ -34,6 +34,13 @@ struct PortDefinition {
     int objectId = -1;
 };
 
+struct ModalPortSource {
+    int portId;
+    int mode;
+    double magnitudeW;
+    double phaseDeg;
+};
+
 struct SweepDefinition {
     double setupFrequencyHz = 0.0;
     double startHz = 0.0;
@@ -47,6 +54,8 @@ struct ProjectDefinition {
     SweepDefinition sweep;
     std::vector<PortDefinition> ports;
     std::string backgroundMaterial = "vacuum";
+    std::vector<ModalPortSource> modalSources;
+    std::vector<int> radiationFaces;
 };
 
 struct BodyInfo {
@@ -111,6 +120,15 @@ struct SParameterPoint {
     double frequencyHz = 0.0;
     std::complex<double> s11;
     std::complex<double> s21;
+};
+
+struct ModalScatteringPoint {
+    double frequencyHz;
+    int inputPort;
+    int inputMode;
+    int outputPort;
+    int outputMode;
+    std::complex<double> value;
 };
 
 }  // namespace fem

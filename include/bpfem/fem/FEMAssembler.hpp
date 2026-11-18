@@ -17,6 +17,7 @@ namespace fem {
 class FEMAssembler {
 public:
     FEMAssembler(const Mesh& mesh, const ProjectDefinition& project, const EdgeTopology& topology, const PortModeSolver& portModeSolver);
+    void enableRadiationFaces();
 
     // Register the additive boundary conditions (wave ports, ABCs, SIBCs, ...)
     // that contribute to the system matrix and RHS. PEC zero-Dirichlet is
@@ -51,6 +52,16 @@ public:
 
     AffineSystem buildAffineSystem() const;
 
+    struct VolumeSystem {
+        SparseMatrix K;
+        SparseMatrix M;
+        SparseMatrix conductivity;
+        SparseMatrix radiation;
+    };
+    VolumeSystem buildVolumeSystem() const;
+    const std::unordered_set<int>& pecDofs() const;
+    Material materialForBody(int bodyId) const;
+
 private:
     // Per-element frequency-independent reference matrices. The volume integrand
     //     curlCurl(a,b) = (1/mu_r) * (curl N_a) . (curl N_b)
@@ -79,8 +90,8 @@ private:
     const EdgeTopology& topology_;
     const PortModeSolver& portModeSolver_;
     std::vector<std::shared_ptr<bc::IBoundaryCondition>> bcs_;
+    std::unordered_set<int> radiationFaces_;
 
-    Material materialForBody(int bodyId) const;
     void applyBoundaryConditions(SparseMatrix& matrix, std::vector<std::complex<double>>& rhs, double frequencyHz, const std::unordered_set<int>& constrainedDofs) const;
     std::unordered_set<int> collectPecConstrainedDofs() const;
     std::shared_ptr<const SparsePattern> sparsityPattern(const std::unordered_set<int>& constrainedDofs) const;
@@ -90,8 +101,10 @@ private:
 
     SparseMatrix assembleVolumePiece(const std::shared_ptr<const SparsePattern>& pattern,
                                      const std::unordered_set<int>& constrainedDofs,
-                                     bool useCurlCurl) const;
+                                     bool useCurlCurl, bool useConductivity = false) const;
     std::shared_ptr<const SparsePattern> volumePatternFor(const std::unordered_set<int>& constrainedDofs) const;
+    SparseMatrix assembleRadiation(const std::shared_ptr<const SparsePattern>& pattern,
+                                  const std::unordered_set<int>& constrainedDofs) const;
 
     mutable std::shared_ptr<const SparsePattern> sparsityPattern_;
     mutable std::unordered_set<int> sparsityPatternConstrainedDofs_;

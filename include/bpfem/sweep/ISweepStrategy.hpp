@@ -59,6 +59,7 @@ struct SweepContext {
 // final full-space field so Application can write `field_last.vtu`.
 struct SweepResult {
     std::vector<SParameterPoint> points;
+    std::vector<ModalScatteringPoint> modalScattering;
     std::vector<std::complex<double>> lastEdgeDofs;
     double lastFrequencyHz = 0.0;
 

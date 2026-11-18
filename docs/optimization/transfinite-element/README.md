@@ -1,6 +1,33 @@
 # 超限元（Transfinite Element, TFE）专题
 
-本目录包含 TFE 理论、历史实现方案和工程入口。现行 CLI `--port-method tfe` 使用端口网格的数值 H(curl) 本征模，并把多个模式的波端口项加到全局系统。完整模态自由度替换与 Schur 推导见理论稿。
+本目录包含 TFE 理论、历史实现方案和工程入口。分块路径使用模态系数作为端口未知量。
+## 原生分块装配
+
+`--port-method tfe-block --sweep direct` 使用教材 §6.3.2 的端口迹替换。
+有效端口迹由模态坐标表示，全阶未知量由内部棱元系数和总模态幅值组成。
+`--sweep mgawe` 在同一系统上按截止划分子带，对矩阵作二阶 Chebyshev
+插值，在多点生成局部矩并作复对称 Galerkin 降阶。
+
+- 保留模数默认使用 AEDT 的 `NumModes`，可用 `--tfe-modes-per-port N` 覆盖。
+- 默认使用工程中的有效入射通道并按独立列求解。`--tfe-source PORT:MODE`
+  指定单个单位入射，模态编号从 1 开始。`--tfe-all-sources` 求所有传播列。
+- `s_parameters_modal.csv` 按频率、输入端口/模态和输出端口/模态列出结果。
+  兼容 CSV 与 VTU 使用首个入射列。兼容 S21 取首个其他物理端口的主模。
+- 支持均匀无损、单一外缘的 PEC 波导截面。精确截止返回诊断。
+  AEDT 的显式面 Radiation 边界用一阶 ABC，阻抗取无损背景介质。
+  截止点邻域用精确残差检查插值质量。
+- 用同一批频点运行 Direct、MGAWE 和带 `--tfe-proxy-direct` 的 MGAWE 命令，
+  可单独测量二阶代理插值误差和降阶误差。代理 Direct 写入
+  `result_TFE_PROXY_DIRECT`。可用 `--tfe-subband-width HZ` 限制每个二阶
+  插值区间的宽度。设置后按实际扫频采样点划分子带。
+- `--tfe-exact-band LOW_HZ HIGH_HZ` 可重复指定闭区间，区间内已有的扫频
+  频点使用精确 TFE Direct，区间外仍使用同一二阶代理。该选项不会加入额外频点。
+  精确点记录各自的线性求解状态，并计入数值分解次数。
+
+集成验收的后端、IOStructure 全带和深谷结果见 [变更记录](../../changes/2026-11-18-tfe-integration.md)。
+
+以下段落记录旧 `--port-method tfe` 的全边坐标多模波端口实现。
+
 
 > 注：本目录早期版本（理论文档与 README）描述的实际是"解析端口模"（APM）。该内容已迁出到 `../analytic-port/` 子目录，并对应模块 `bpfem::apm`、CLI `--port-method analytic`。
 

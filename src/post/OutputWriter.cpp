@@ -210,6 +210,19 @@ OutputWriter::LagrangeTetTable OutputWriter::buildLagrangeTetTable(int order) {
     return table;
 }
 
+void OutputWriter::writeModalScattering(const std::filesystem::path& path,
+                                      const std::vector<ModalScatteringPoint>& data) {
+    std::ofstream stream(path);
+    stream << "frequency_Hz,input_port,input_mode,output_port,output_mode,S_real,S_imag\n"
+           << std::setprecision(17);
+    for (const auto& row : data) {
+        stream << row.frequencyHz << ',' << row.inputPort << ',' << row.inputMode << ','
+               << row.outputPort << ',' << row.outputMode << ',' << row.value.real() << ','
+               << row.value.imag() << '\n';
+    }
+    if (!stream) throw std::runtime_error("Failed to write modal S parameters: " + path.string());
+}
+
 void OutputWriter::writeSParameters(const std::filesystem::path& path, const std::vector<SParameterPoint>& data) {
     std::ofstream out(path);
     if (!out) {

@@ -30,7 +30,8 @@ enum class PortMethod {
     // Multi-mode transfinite element (bpfem::tfe). Same 2D eigensolve as
     // Numerical, but keeps the `tfeModesPerPort` lowest physical modes,
     // each contributing a rank-1 port operator.
-    Transfinite
+    Transfinite,
+    TfeBlock
 };
 
 // Sparse-solver backend selection. Auto mirrors the legacy compile-time
@@ -97,6 +98,13 @@ struct Options {
     // TE10 closed-form reference is needed on a known rectangular port.
     PortMethod portMethod = PortMethod::Numerical;
     int tfeModesPerPort = 1;
+    bool tfeModesSpecified = false;
+    bool tfeAllSources = false;
+    int tfeSourcePort = -1;
+    int tfeSourceMode = 1;
+    bool tfeProxyDirect = false;
+    double tfeSubbandWidthHz = 0.0;
+    std::vector<std::pair<double, double>> tfeExactBandsHz;
 
     // Sparse solver backend selection (Step 1 of strategy-interfaces phase).
     LinearSolverKind linearSolver = LinearSolverKind::Auto;

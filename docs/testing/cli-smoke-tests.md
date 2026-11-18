@@ -17,6 +17,8 @@
 
 ## 单频点求解
 
+原生分块 TFE 的运行命令和两种扫频的验证见 [TFE 专题](../optimization/transfinite-element/README.md) 与 [集成变更记录](../changes/2026-11-18-tfe-integration.md)。
+
 ```powershell
 .\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result --max-sweep-points 1
 ```

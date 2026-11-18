@@ -25,14 +25,15 @@ void writeFixtures(const std::filesystem::path& aedtPath,
             << "ID=0\n"
             << "BoundType='Wave Port'\n"
             << "Objects(42)\n"
-            << "NumModes=1\n"
+            << "NumModes=2\n"
             << "$end '1'\n"
+            << "$begin '2'\nBoundType='Radiation'\nFaces(8,9)\n$end '2'\n"
             << "Frequency='95GHz'\n"
             << "RangeStart='90GHz'\n"
             << "RangeEnd='100GHz'\n"
             << "RangeCount=101\n"
-            << "SourceEntry(ID=0, Index=0, Terminal=false, Terminated=false, "
-               "Magnitude='1W', Phase='0deg')\n";
+            << "SourceEntry(ID=0, Index=1, Terminal=false, Terminated=false, "
+               "Magnitude='1W', Phase='30deg')\n";
     }
     {
         std::ofstream out(meshPath);
@@ -70,6 +71,9 @@ void testObjectPortResolution() {
     require(project.ports[0].objectId == 42, "AEDT objectId mismatch");
     require(project.ports[0].faceId == -1, "Object port should be unresolved before mesh matching");
     require(project.ports[0].excited, "AEDT source excitation mismatch");
+    require(project.modalSources.size() == 1 && project.modalSources[0].mode == 2,
+            "AEDT modal source index mismatch");
+    require(project.radiationFaces == std::vector<int>({8, 9}), "AEDT radiation faces mismatch");
     require(mesh.bodies.at(42).hasBounds, "NGMesh body bounds were not parsed");
     require(mesh.bodies.at(42).faceIds.size() == 1, "NGMesh standalone face_ids were not parsed");
 

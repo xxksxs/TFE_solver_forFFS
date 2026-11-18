@@ -21,6 +21,7 @@
 #include "bpfem/sweep/ISweepStrategy.hpp"
 #include "bpfem/apm/AnalyticPortBuilder.hpp"
 #include "bpfem/tfe/TransfiniteElementBuilder.hpp"
+#include "bpfem/tfe/TfeSystem.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +75,7 @@ std::string sweepOutputName(SweepStrategy strategy) {
 }
 
 std::filesystem::path runOutputDirectory(const Options& options) {
+    if (options.tfeProxyDirect) return options.outDir / "result_TFE_PROXY_DIRECT";
     return options.outDir / ("result_" + sweepOutputName(options.sweepStrategy));
 }
 
@@ -270,13 +272,41 @@ Options parseOptions(int argc, char** argv) {
                 options.portMethod = PortMethod::Analytic;
             } else if (m == "tfe" || m == "transfinite") {
                 options.portMethod = PortMethod::Transfinite;
+            } else if (m == "tfe-block") {
+                options.portMethod = PortMethod::TfeBlock;
             } else {
-                throw std::runtime_error("--port-method must be 'numerical', 'analytic', or 'tfe'");
+                throw std::runtime_error("--port-method must be numerical, analytic, tfe, or tfe-block");
             }
         } else if (arg == "--tfe-modes-per-port") {
+            options.tfeModesSpecified = true;
             options.tfeModesPerPort = std::stoi(requireValue(arg));
             if (options.tfeModesPerPort < 1) {
                 throw std::runtime_error("--tfe-modes-per-port must be >= 1");
+            }
+        } else if (arg == "--tfe-all-sources") {
+            options.tfeAllSources = true;
+        } else if (arg == "--tfe-proxy-direct") {
+            options.tfeProxyDirect = true;
+        } else if (arg == "--tfe-subband-width") {
+            options.tfeSubbandWidthHz = std::stod(requireValue(arg));
+            if (!std::isfinite(options.tfeSubbandWidthHz) || options.tfeSubbandWidthHz <= 0.0) {
+                throw std::runtime_error("--tfe-subband-width requires a positive width in Hz");
+            }
+        } else if (arg == "--tfe-exact-band") {
+            const double left = std::stod(requireValue(arg));
+            const double right = std::stod(requireValue(arg));
+            if (!std::isfinite(left) || !std::isfinite(right) || left <= 0.0 || right < left) {
+                throw std::runtime_error("--tfe-exact-band requires two ordered positive frequencies in Hz");
+            }
+            options.tfeExactBandsHz.emplace_back(left, right);
+        } else if (arg == "--tfe-source") {
+            const auto source = requireValue(arg);
+            const auto separator = source.find(':');
+            if (separator == std::string::npos) throw std::runtime_error("--tfe-source requires PORT:MODE");
+            options.tfeSourcePort = std::stoi(source.substr(0, separator));
+            options.tfeSourceMode = std::stoi(source.substr(separator + 1));
+            if (options.tfeSourcePort < 0 || options.tfeSourceMode < 1) {
+                throw std::runtime_error("--tfe-source requires a nonnegative port ID and one-based mode");
             }
         } else if (arg == "--linear-solver") {
             const std::string m = requireValue(arg);
@@ -362,7 +392,10 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10] [--mgawe-adaptive|--mgawe-2001]\n"
                       << "                     [--mgawe-expansion <Hz> <order>] (repeatable)\n"
                       << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12] [--wcawe-check-moments]\n"
-                      << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"
+                      << "                     [--port-method numerical|analytic|tfe|tfe-block] [--tfe-modes-per-port N]\n"
+                      << "                     [--tfe-all-sources | --tfe-source PORT:MODE] (tfe-block)\n"
+                      << "                     [--tfe-proxy-direct] [--tfe-subband-width HZ] (tfe-block with --sweep mgawe)\n"
+                      << "                     [--tfe-exact-band LOW_HZ HIGH_HZ] (repeatable, tfe-block MGAWE)\n"
                       << "                     [--linear-solver auto|direct|bicgstab|gmres|mumps]\n"
                       << "                     [--precon none|jacobi|ilu0|schwarz] [--gmres-restart 30]\n"
                       << "                     [--iterative-spmv native|mkl]\n"
@@ -468,8 +501,33 @@ int runApplication(int argc, char** argv) {
         log.info("Geometric edges: " + std::to_string(topology.geometricEdgeCount()));
         log.info("Local basis functions per tetrahedron: " + std::to_string(topology.localDofCount()));
         PortModeSolver portModeSolver(mesh, topology);
+        const bool nativeTfe = options.portMethod == PortMethod::TfeBlock;
+        if (options.tfeProxyDirect && (!nativeTfe || options.sweepStrategy != SweepStrategy::Mgawe)) {
+            throw std::runtime_error("--tfe-proxy-direct requires tfe-block with --sweep mgawe");
+        }
+        if (options.tfeSubbandWidthHz > 0.0 && (!nativeTfe || options.sweepStrategy != SweepStrategy::Mgawe)) {
+            throw std::runtime_error("--tfe-subband-width requires tfe-block with --sweep mgawe");
+        }
+        if (!options.tfeExactBandsHz.empty() &&
+            (!nativeTfe || options.sweepStrategy != SweepStrategy::Mgawe || options.tfeProxyDirect)) {
+            throw std::runtime_error("--tfe-exact-band requires tfe-block with --sweep mgawe");
+        }
+        if ((options.tfeAllSources || options.tfeSourcePort >= 0) &&
+            (!nativeTfe || (options.tfeAllSources && options.tfeSourcePort >= 0))) {
+            throw std::runtime_error("Select one source option with --port-method tfe-block");
+        }
+        if (nativeTfe && options.sweepStrategy != SweepStrategy::Direct && options.sweepStrategy != SweepStrategy::Mgawe) {
+            throw std::runtime_error("tfe-block supports --sweep direct or mgawe");
+        }
+        if (nativeTfe && options.sweepStrategy == SweepStrategy::Mgawe &&
+            (options.mgaweAdaptive || options.mgawe2001)) {
+            throw std::runtime_error("tfe-block MGAWE uses fixed-point Chebyshev subbands");
+        }
         std::string portMethodName;
         switch (options.portMethod) {
+            case PortMethod::TfeBlock:
+                portMethodName = "TFE block (modal trace replacement)";
+                break;
             case PortMethod::Transfinite:
                 portMethodName = "transfinite (TFE numerical eigenmodes, "
                                  + std::to_string(options.tfeModesPerPort) + " modes/port)";
@@ -519,7 +577,7 @@ int runApplication(int argc, char** argv) {
                          + std::to_string(geo.b * 1.0e3) + " mm");
                 portModeSolver.setPrecomputed(port.faceId, apmBuilder.build(port.faceId));
             }
-        } else {  // PortMethod::Transfinite
+        } else if (options.portMethod == PortMethod::Transfinite) {
             tfe::TfeOptions tfeOpts;
             tfeOpts.modesPerPort = options.tfeModesPerPort;
             tfe::TransfiniteElementBuilder tfeBuilder(mesh, topology, portModeSolver, tfeOpts);
@@ -545,12 +603,26 @@ int runApplication(int argc, char** argv) {
                 portModeSolver.setMultiMode(port.faceId, std::move(multi));
             }
         }
-        for (const auto& port : project.ports) {
-            const auto& mode = portModeSolver.solve(port.faceId);
-            log.info("Port face " + std::to_string(port.faceId) + " mode DOFs: " + std::to_string(mode.edgeDofs.size()));
-        }
         FEMAssembler assembler(mesh, project, topology, portModeSolver);
-        {
+        std::unique_ptr<tfe::TfeSystem> tfeSystem;
+        if (nativeTfe) {
+            assembler.enableRadiationFaces();
+            tfeSystem = std::make_unique<tfe::TfeSystem>(mesh, project, topology,
+                assembler, portModeSolver, options.tfeModesSpecified ? options.tfeModesPerPort : 0);
+            log.info("TFE interior DOFs " + std::to_string(tfeSystem->interiorCount())
+                     + ", replaced trace DOFs " + std::to_string(tfeSystem->traceCount())
+                     + ", retained modes " + std::to_string(tfeSystem->channels().size())
+                     + ", upper NNZ " + std::to_string(tfeSystem->pattern()->columnIndices.size()));
+            for (const auto& channel : tfeSystem->channels()) {
+                log.info("TFE port " + std::to_string(channel.portId) + " mode " + std::to_string(channel.mode)
+                         + (channel.transverseMagnetic ? " TM" : " TE")
+                         + ", cutoff " + std::to_string(channel.cutoffHz) + " Hz");
+            }
+        } else {
+            for (const auto& port : project.ports) {
+                const auto& mode = portModeSolver.solve(port.faceId);
+                log.info("Port face " + std::to_string(port.faceId) + " mode DOFs: " + std::to_string(mode.edgeDofs.size()));
+            }
             std::vector<std::shared_ptr<bc::IBoundaryCondition>> bcs;
             bcs.push_back(std::make_shared<bc::WavePortBC>());
             assembler.setBoundaryConditions(std::move(bcs));
@@ -569,8 +641,8 @@ int runApplication(int argc, char** argv) {
             }
             log.info("Preconditioner: " + preconName);
         }
-        std::unique_ptr<sweep::ISweepStrategy> sweepStrategy =
-            factory::makeSweepStrategy(options, project, assembler, portModeSolver);
+        auto sweepStrategy = factory::makeSweepStrategy(options, project, assembler, portModeSolver,
+                                                         tfeSystem.get());
         report.sweepStrategyName = sweepStrategy->name();
         log.info("Sweep strategy: " + std::string(sweepStrategy->name()));
 
@@ -691,6 +763,9 @@ int runApplication(int argc, char** argv) {
         log.phase("Result export");
         const std::filesystem::path csvPath = options.outDir / "s_parameters.csv";
         OutputWriter::writeSParameters(csvPath, sparams);
+        if (!swept.modalScattering.empty()) {
+            OutputWriter::writeModalScattering(options.outDir / "s_parameters_modal.csv", swept.modalScattering);
+        }
         log.info("Wrote " + csvPath.string());
         if (!lastEdgeDofs.empty()) {
             const std::filesystem::path vtuPath = options.outDir / "field_last.vtu";

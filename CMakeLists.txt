@@ -37,6 +37,7 @@ add_library(bp_fem_core STATIC
     src/fastsweep/PolynomialPortMomentBuilder.cpp
     src/fastsweep/PolynomialWcaweRecurrence.cpp
     src/fastsweep/PortModeUtilities.cpp
+    src/fastsweep/TfePolynomialModel.cpp
     src/fastsweep/UpperTriangularBlockAction.cpp
     src/fastsweep/WellConditionedBasisBuilder.cpp
     src/fem/EdgeTopology.cpp
@@ -64,8 +65,10 @@ add_library(bp_fem_core STATIC
     src/sweep/DirectSweep.cpp
     src/sweep/GaweSweep.cpp
     src/sweep/MgaweSweep.cpp
+    src/sweep/TfeSweep.cpp
     src/sweep/WcaweSweep.cpp
     src/tfe/TransfiniteElementBuilder.cpp
+    src/tfe/TfeSystem.cpp
 )
 
 target_include_directories(bp_fem_core
@@ -114,6 +117,10 @@ add_test(NAME io_parser_tests COMMAND io_parser_tests)
 add_executable(sparse_solver_tests tests/sparse_solver_tests.cpp)
 target_link_libraries(sparse_solver_tests PRIVATE bp_fem_core)
 add_test(NAME sparse_solver_tests COMMAND sparse_solver_tests)
+add_executable(tfe_tests tests/tfe_tests.cpp)
+target_link_libraries(tfe_tests PRIVATE bp_fem_core)
+add_test(NAME tfe_tests COMMAND tfe_tests)
+set_tests_properties(tfe_tests PROPERTIES ENVIRONMENT "MKL_NUM_THREADS=2")
 
 set(_solver_runtime_files)
 if(WIN32 AND BPFEM_USE_MKL AND MKL_FOUND AND NOT MKL_LINK STREQUAL "static")
@@ -155,6 +162,7 @@ if(_solver_runtime_files)
     add_dependencies(fastsweep_tests bpfem_solver_runtime)
     add_dependencies(io_parser_tests bpfem_solver_runtime)
     add_dependencies(sparse_solver_tests bpfem_solver_runtime)
+    add_dependencies(tfe_tests bpfem_solver_runtime)
 endif()
 
 # Logger uses GetProcessMemoryInfo (Psapi) on Windows for the working-set /
@@ -171,10 +179,12 @@ if(MSVC)
     target_compile_options(fastsweep_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(io_parser_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(sparse_solver_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_compile_options(tfe_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
 else()
     target_compile_options(bp_fem_core PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(bp_fem_solver PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(fastsweep_tests PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(io_parser_tests PRIVATE -Wall -Wextra -pedantic)
     target_compile_options(sparse_solver_tests PRIVATE -Wall -Wextra -pedantic)
+    target_compile_options(tfe_tests PRIVATE -Wall -Wextra -pedantic)
 endif()

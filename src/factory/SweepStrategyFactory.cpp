@@ -20,6 +20,7 @@
 #include "bpfem/sweep/DirectSweep.hpp"
 #include "bpfem/sweep/GaweSweep.hpp"
 #include "bpfem/sweep/MgaweSweep.hpp"
+#include "bpfem/sweep/TfeSweep.hpp"
 #include "bpfem/sweep/WcaweSweep.hpp"
 
 namespace fem::factory {
@@ -28,7 +29,12 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
     const Options& options,
     const ProjectDefinition& project,
     const FEMAssembler& assembler,
-    const PortModeSolver& portModeSolver) {
+    const PortModeSolver& portModeSolver,
+    const tfe::TfeSystem* tfeSystem) {
+    if (tfeSystem != nullptr && options.sweepStrategy == SweepStrategy::Direct) {
+        return std::make_unique<sweep::TfeSweep>(*tfeSystem, options.tfeAllSources,
+            options.tfeSourcePort, options.tfeSourceMode);
+    }
     switch (options.sweepStrategy) {
         case SweepStrategy::Alps: {
             sweep::AlpsOptions alpsOpts;
@@ -63,6 +69,11 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
             mgaweOpts.expansions = options.mgaweExpansions;
             mgaweOpts.polynomialProjection = true;
             mgaweOpts.dropTolerance = options.mgaweDropTolerance;
+            if (tfeSystem != nullptr) {
+                return std::make_unique<sweep::TfeSweep>(*tfeSystem, options.tfeAllSources,
+                    options.tfeSourcePort, options.tfeSourceMode, std::move(mgaweOpts),
+                    options.tfeProxyDirect, options.tfeSubbandWidthHz, options.tfeExactBandsHz);
+            }
             return std::make_unique<sweep::MgaweSweep>(project, assembler, portModeSolver,
                                                        mgaweOpts);
         }

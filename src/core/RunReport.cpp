@@ -192,8 +192,11 @@ void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, con
     add("portMethod",
         options.portMethod == PortMethod::Analytic    ? "analytic"
       : options.portMethod == PortMethod::Transfinite ? "tfe"
+      : options.portMethod == PortMethod::TfeBlock ? "tfe-block"
                                                        : "numerical");
     add("tfeModesPerPort", std::to_string(options.tfeModesPerPort));
+    add("tfeSubbandWidthHz", std::to_string(options.tfeSubbandWidthHz));
+    add("tfeProxyDirect", options.tfeProxyDirect ? "true" : "false");
     {
         std::string ls = "auto";
         switch (options.linearSolver) {

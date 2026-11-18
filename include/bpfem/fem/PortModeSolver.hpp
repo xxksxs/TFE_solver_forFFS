@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,11 @@ struct MultiPortMode {
     int excitationModeIndex = 0;       // index into modes; usually TE10 (0)
 };
 
+struct WaveguideMode {
+    PortMode trace;
+    bool transverseMagnetic = false;
+};
+
 double poyntingPowerIntegral(const PortMode& mode, double frequencyHz);
 double powerNormalizationFactor(const PortMode& mode, double frequencyHz);
 
@@ -56,6 +62,10 @@ public:
     // returned has its excitationModeIndex set to 0, i.e. the dominant
     // (lowest physical k_c^2) mode.
     MultiPortMode computeMultiMode(int faceId, int count) const;
+    // Homogeneous PEC cross-section: transverse curl modes (TE) and gradients
+    // of Dirichlet scalar eigenmodes (TM), on the same constrained trace.
+    std::vector<WaveguideMode> computeWaveguideModes(
+        int faceId, int count, const std::unordered_set<int>& pecDofs) const;
 
     // Single-mode injection (used by APM / numerical paths).
     void setPrecomputed(int faceId, PortMode mode) const;
@@ -78,6 +88,9 @@ private:
     mutable std::map<int, MultiPortMode> multiCache_;
 
     PortMode computeMode(int faceId) const;
+    MultiPortMode computeModes(int faceId, int count,
+                               const std::unordered_set<int>* pecDofs,
+                               std::vector<WaveguideMode>* waveguideModes) const;
     std::pair<int, int> edgeDofsForNodes(int aNode, int bNode) const;
     static std::uint64_t edgeKey(int aNode, int bNode);
 };

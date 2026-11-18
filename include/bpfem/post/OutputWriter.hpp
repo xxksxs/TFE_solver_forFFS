@@ -25,6 +25,8 @@ public:
     static constexpr int kMaxFieldOutputOrder = 3;
 
     static void writeSParameters(const std::filesystem::path& path, const std::vector<SParameterPoint>& data);
+    static void writeModalScattering(const std::filesystem::path& path,
+                                     const std::vector<ModalScatteringPoint>& data);
 
     // Writes a VTU containing only the electric field (E_real, E_imag) and the
     // reconstructed magnetic field (H_real, H_imag). Magnitudes / dB / PEC

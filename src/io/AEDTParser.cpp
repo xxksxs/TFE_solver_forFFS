@@ -70,6 +70,19 @@ void AEDTParser::parsePorts(const std::string& text, ProjectDefinition& project)
     const std::regex portPattern(R"(\$begin '([0-9]+)'([\s\S]*?)\$end '\1')");
     for (std::sregex_iterator it(text.begin(), text.end(), portPattern), end; it != end; ++it) {
         const std::string body = (*it)[2].str();
+        if (body.find("BoundType='Radiation'") != std::string::npos) {
+            const std::regex facesPattern(R"(Faces\(([\d,\s]+)\))");
+            std::smatch faces;
+            if (std::regex_search(body, faces, facesPattern)) {
+                const std::string ids = faces[1].str();
+                const std::regex integer(R"(\d+)");
+                for (std::sregex_iterator f(ids.begin(), ids.end(), integer), end; f != end; ++f) {
+                    project.radiationFaces.push_back(std::stoi(f->str()));
+                }
+            } else {
+                project.radiationFaces.push_back(-1);
+            }
+        }
         if (body.find("BoundType='Wave Port'") == std::string::npos) {
             continue;
         }
@@ -82,12 +95,17 @@ void AEDTParser::parsePorts(const std::string& text, ProjectDefinition& project)
     }
 
     const std::regex sourcePattern(R"(SourceEntry\(ID=([0-9]+),[^\)]*Magnitude='([^']+)'\s*,\s*Phase='([^']+)')");
+    const std::regex sourceIndex(R"(\bIndex=([0-9]+))");
     for (std::sregex_iterator it(text.begin(), text.end(), sourcePattern), end; it != end; ++it) {
         const int id = std::stoi((*it)[1].str());
         const double mag = parseEngineeringValue((*it)[2].str());
         const double phase = parseEngineeringValue((*it)[3].str());
         for (auto& port : project.ports) {
             if (port.id == id) {
+                std::smatch index;
+                const auto source = it->str();
+                const int mode = std::regex_search(source, index, sourceIndex) ? std::stoi(index[1]) + 1 : 1;
+                project.modalSources.push_back({id, mode, mag, phase});
                 port.magnitudeW = mag;
                 port.phaseDeg = phase;
                 port.excited = mag > 0.0;

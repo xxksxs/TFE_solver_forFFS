@@ -98,6 +98,19 @@ inline std::size_t upperTriIndex(int a, int b, int n) {
 FEMAssembler::FEMAssembler(const Mesh& mesh, const ProjectDefinition& project, const EdgeTopology& topology, const PortModeSolver& portModeSolver)
     : mesh_(mesh), project_(project), topology_(topology), portModeSolver_(portModeSolver) {}
 
+void FEMAssembler::enableRadiationFaces() {
+    for (const int face : project_.radiationFaces) {
+        if (face < 0 || topology_.edgesOnFace(face).empty() ||
+            std::any_of(project_.ports.begin(), project_.ports.end(),
+                        [face](const auto& port) { return port.faceId == face; })) {
+            throw std::runtime_error("Invalid or overlapping TFE radiation face " + std::to_string(face));
+        }
+    }
+    radiationFaces_.insert(project_.radiationFaces.begin(), project_.radiationFaces.end());
+    constrainedDofsCached_ = false;
+    sparsityPattern_.reset();
+}
+
 void FEMAssembler::setBoundaryConditions(std::vector<std::shared_ptr<bc::IBoundaryCondition>> bcs) {
     bcs_ = std::move(bcs);
     // Sparsity pattern depends on the BC set, so invalidate the cached one.
@@ -216,6 +229,97 @@ SparseMatrix FEMAssembler::assemble(double frequencyHz, std::vector<std::complex
     return matrix;
 }
 
+const std::unordered_set<int>& FEMAssembler::pecDofs() const {
+    return cachedConstrainedDofs();
+}
+
+FEMAssembler::VolumeSystem FEMAssembler::buildVolumeSystem() const {
+    ensureElementCache();
+    const auto& constrained = cachedConstrainedDofs();
+    const auto pattern = volumePatternFor(constrained);
+    return {assembleVolumePiece(pattern, constrained, true),
+            assembleVolumePiece(pattern, constrained, false),
+            assembleVolumePiece(pattern, constrained, false, true),
+            assembleRadiation(pattern, constrained)};
+}
+
+SparseMatrix FEMAssembler::assembleRadiation(const std::shared_ptr<const SparsePattern>& pattern,
+                                            const std::unordered_set<int>& constrained) const {
+    SparseMatrix matrix(pattern);
+    if (radiationFaces_.empty()) return matrix;
+    using Face = std::array<int, 3>;
+    std::map<Face, int> radiationTriangles;
+    for (const auto& tri : mesh_.surfaceTriangles) {
+        const auto facet = mesh_.facets.find(tri.facetId);
+        if (facet == mesh_.facets.end() || !radiationFaces_.count(facet->second.faceId)) continue;
+        auto face = tri.vertexIds;
+        std::sort(face.begin(), face.end());
+        if (!radiationTriangles.emplace(face, 0).second) {
+            throw std::runtime_error("Duplicate radiation triangle");
+        }
+    }
+    const auto etaMaterial = [&] {
+        const auto found = project_.materials.find(project_.backgroundMaterial);
+        return found == project_.materials.end() ? Material{} : found->second;
+    }();
+    if (!(etaMaterial.relativePermeability > 0.0) || !(etaMaterial.relativePermittivity > 0.0)
+        || etaMaterial.conductivity != 0.0) {
+        throw std::runtime_error("TFE first-order ABC needs a lossless homogeneous background");
+    }
+    const double muOverEta = std::sqrt(mu0 * epsilon0 * etaMaterial.relativePermittivity
+                                      / etaMaterial.relativePermeability);
+    for (std::size_t t = 0; t < mesh_.tetrahedra.size(); ++t) {
+        const auto& tet = mesh_.tetrahedra[t];
+        for (const auto& local : EdgeTopology::localFaces) {
+            Face face{tet.vertexIds[local[0]], tet.vertexIds[local[1]], tet.vertexIds[local[2]]};
+            std::sort(face.begin(), face.end());
+            const auto found = radiationTriangles.find(face);
+            if (found == radiationTriangles.end()) continue;
+            if (++found->second != 1) throw std::runtime_error("Radiation face is not exterior");
+            std::array<Vec3, 4> p{};
+            for (int i = 0; i < 4; ++i) p[i] = mesh_.pointsById.at(tet.vertexIds[i]);
+            const auto gradient = tetraGradients(p);
+            const auto normal = cross(p[local[1]] - p[local[0]], p[local[2]] - p[local[0]]);
+            const double twiceArea = norm(normal);
+            if (!(twiceArea > 0.0)) throw std::runtime_error("Degenerate radiation face");
+            const auto unitNormal = normal / twiceArea;
+            const auto& refs = topology_.elementDofs()[t];
+            // Degree-five triangle quadrature also integrates order-one
+            // Nedelec tangential trace products (degree four).
+            const std::array<std::array<double, 4>, 7> quadrature{{
+                {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.225},
+                {0.059715871789770, 0.470142064105115, 0.470142064105115, 0.132394152788506},
+                {0.470142064105115, 0.059715871789770, 0.470142064105115, 0.132394152788506},
+                {0.470142064105115, 0.470142064105115, 0.059715871789770, 0.132394152788506},
+                {0.797426985353087, 0.101286507323456, 0.101286507323456, 0.125939180544827},
+                {0.101286507323456, 0.797426985353087, 0.101286507323456, 0.125939180544827},
+                {0.101286507323456, 0.101286507323456, 0.797426985353087, 0.125939180544827}}};
+            for (const auto& point : quadrature) {
+                std::array<double, 4> lambda{};
+                for (int i = 0; i < 3; ++i) lambda[local[i]] = point[i];
+                std::vector<Vec3> tangential;
+                for (const auto& ref : refs) {
+                    tangential.push_back(cross(unitNormal, evaluateBasis(ref, lambda, gradient).value));
+                }
+                for (std::size_t i = 0; i < refs.size(); ++i) {
+                    const int row = refs[i].globalIndex;
+                    if (constrained.count(row)) continue;
+                    for (std::size_t j = i; j < refs.size(); ++j) {
+                        const int col = refs[j].globalIndex;
+                        if (constrained.count(col)) continue;
+                        matrix.add(row, col, 0.5 * twiceArea * point[3] * muOverEta *
+                                              dot(tangential[i], tangential[j]));
+                    }
+                }
+            }
+        }
+    }
+    for (const auto& face : radiationTriangles) {
+        if (face.second != 1) throw std::runtime_error("Radiation triangle has no adjacent volume");
+    }
+    return matrix;
+}
+
 FEMAssembler::AffineSystem FEMAssembler::buildAffineSystem() const {
     ensureElementCache();
     AffineSystem out;
@@ -310,7 +414,7 @@ std::shared_ptr<const SparsePattern> FEMAssembler::volumePatternFor(const std::u
 
 SparseMatrix FEMAssembler::assembleVolumePiece(const std::shared_ptr<const SparsePattern>& pattern,
                                                const std::unordered_set<int>& constrainedDofs,
-                                               bool useCurlCurl) const {
+                                               bool useCurlCurl, bool useConductivity) const {
     SparseMatrix matrix(pattern);
     const auto& elementDofs = topology_.elementDofs();
     const auto isConstrained = [&constrainedDofs](int dof) {
@@ -321,7 +425,8 @@ SparseMatrix FEMAssembler::assembleVolumePiece(const std::shared_ptr<const Spars
         if (!entry.valid) {
             continue;
         }
-        const double scale = useCurlCurl ? entry.invMu : entry.epsR;
+        const double scale = useCurlCurl ? entry.invMu : (useConductivity ? entry.conductivity : entry.epsR);
+        if (scale == 0.0) continue;
         const auto& src = useCurlCurl ? entry.curlCurlGeo : entry.massGeo;
         const auto& refs = elementDofs[elementIndex];
         const int dof = entry.dof;
@@ -395,7 +500,7 @@ std::unordered_set<int> FEMAssembler::collectPecConstrainedDofs() const {
         portFaces.insert(port.faceId);
     }
     for (const auto& [faceId, bodyEdges] : collectSurfaceEdgesByFace()) {
-        if (portFaces.count(faceId) != 0) {
+        if (portFaces.count(faceId) != 0 || radiationFaces_.count(faceId) != 0) {
             continue;
         }
         constrainedEdges.insert(bodyEdges.begin(), bodyEdges.end());

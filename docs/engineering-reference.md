@@ -63,7 +63,7 @@ bp_fem_solver.exe `
   --aedt <project.aedt> `
   --mesh <mesh.ngmesh> `
   --basis-order 0|1 `
-  --port-method numerical|analytic|tfe `
+  --port-method numerical|analytic|tfe|tfe-block `
   --linear-solver auto|direct|bicgstab|gmres|mumps `
   --sweep direct|awe|gawe|mgawe|wcawe|alps `
   --out result
@@ -77,7 +77,7 @@ bp_fem_solver.exe `
 | `--mesh` | NGMesh 网格路径 |
 | `--basis-order` | `0` 为 Whitney/Nédélec 零阶棱元，`1` 为一阶层次棱元 |
 | `--max-sweep-points` | 从工程扫频中最多取多少个频点 |
-| `--port-method` | 数值端口、解析 TE10 或多模 TFE |
+| `--port-method` | 数值端口、解析 TE10、全边多模端口或原生分块 TFE。分块接口见 [TFE 专题](optimization/transfinite-element/README.md)。 |
 | `--linear-solver` | 自动路由、PARDISO 直接法或迭代法 |
 | `--precon` | `none`、`jacobi`、`ilu0` 或 `schwarz`，只对迭代法生效 |
 | `--sweep` | 选择直接扫频或快速扫频策略 |

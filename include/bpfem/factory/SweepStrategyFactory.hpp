@@ -8,6 +8,8 @@
 
 #include <memory>
 
+namespace fem::tfe { class TfeSystem; }
+
 namespace fem::factory {
 
 // Builds the sweep strategy that matches Options::sweepStrategy.
@@ -19,7 +21,8 @@ std::unique_ptr<sweep::ISweepStrategy> makeSweepStrategy(
     const Options& options,
     const ProjectDefinition& project,
     const FEMAssembler& assembler,
-    const PortModeSolver& portModeSolver);
+    const PortModeSolver& portModeSolver,
+    const tfe::TfeSystem* tfeSystem = nullptr);
 
 }  // namespace fem::factory
 
