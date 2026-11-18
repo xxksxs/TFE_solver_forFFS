@@ -21,6 +21,10 @@
 
 namespace fem::sweep {
 
+namespace {
+constexpr double recurrenceTolerance = 1.0e-10;
+}
+
 // 构造 WCAWE 扫频器，并把阶数和 breakdown 阈值规整到可用范围。
 WcaweSweep::WcaweSweep(const ProjectDefinition& project,
                        const FEMAssembler& assembler,
@@ -56,6 +60,13 @@ SweepResult WcaweSweep::run(const std::vector<double>& frequencies,
     linalg::SolverConfig solverConfig;
     solverConfig.maxIterations = ctx.linearMaxIterations;
     solverConfig.tolerance = ctx.linearTolerance;
+    if (dynamic_cast<linalg::IFactorizedSparseSolver*>(&ctx.solver) == nullptr) {
+        // Keep the iterative solve below the recurrence's independent residual check.
+        solverConfig.tolerance = std::min(solverConfig.tolerance, 0.1 * recurrenceTolerance);
+        std::ostringstream tolerance;
+        tolerance << std::scientific << solverConfig.tolerance;
+        ctx.log.info("WCAWE iterative moment solve relative tolerance: " + tolerance.str());
+    }
     const auto offlineStarted = std::chrono::steady_clock::now();
     const int dimension = buildOffline(expansionHz, ctx.solver, solverConfig);
     const double offlineBuildSec = std::chrono::duration<double>(
@@ -217,7 +228,7 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     fastsweep::WcaweBuildOptions buildOptions;
     buildOptions.requestedOrder = options_.order;
     buildOptions.breakdownTolerance = options_.dropTolerance;
-    buildOptions.recurrenceTolerance = 1.0e-10;
+    buildOptions.recurrenceTolerance = recurrenceTolerance;
     buildOptions.orthogonalityTolerance = 1.0e-10;
     buildOptions.reorthogonalizationPasses = 2;
     wcaweBuild_ = fastsweep::PolynomialWcaweRecurrence::build(
@@ -233,7 +244,8 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     deflatedColumns_ = options_.order - romDim_;
     if (romDim_ == 0) {
         throw std::runtime_error(
-            "WcaweSweep: paper WCAWE recurrence produced no usable basis");
+            "WcaweSweep: paper WCAWE recurrence produced no usable basis: "
+            + wcaweBuild_.terminationMessage);
     }
 
     if (options_.checkMoments) {
