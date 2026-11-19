@@ -6,6 +6,7 @@
 #include "bpfem/fastsweep/LinearAlgebra.hpp"
 #include "bpfem/linalg/FactorizedSolveSession.hpp"
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -23,6 +24,28 @@ namespace fem::sweep {
 
 namespace {
 constexpr double recurrenceTolerance = 1.0e-10;
+
+void refineFactorizedMoment(const SparseMatrix& matrix,
+                            const std::vector<std::complex<double>>& rhs,
+                            double tolerance,
+                            linalg::FactorizedSolveSession& session,
+                            SolveResult& result) {
+    result.status = SolveStatus::ResidualTooLarge;
+    constexpr int maxCorrections = 2;
+    for (int step = 0; step < maxCorrections && result.status == SolveStatus::ResidualTooLarge; ++step) {
+        const double previous = result.residual;
+        auto residual = matrix.multiply(result.field);
+        for (std::size_t i = 0; i < rhs.size(); ++i) residual[i] = rhs[i] - residual[i];
+        const auto correction = session.solve(residual);
+        if (correction.status != SolveStatus::Converged &&
+            correction.status != SolveStatus::ResidualTooLarge) {
+            break;
+        }
+        for (std::size_t i = 0; i < rhs.size(); ++i) result.field[i] += correction.field[i];
+        linalg::checkResidual(matrix, rhs, tolerance, result);
+        if (result.residual >= previous) break;
+    }
+}
 }
 
 // 构造 WCAWE 扫频器，并把阶数和 breakdown 阈值规整到可用范围。
@@ -218,9 +241,14 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     };
 
     linalg::FactorizedSolveSession solveSession(solver, a0, solverConfig);
+    const double momentTolerance = std::min(solverConfig.tolerance, recurrenceTolerance);
     auto solveAtExpansion =
         [&](const std::vector<Complex>& rhs) {
             SolveResult result = solveSession.solve(rhs);
+            if (solveSession.reusesFactorization() && result.residual > momentTolerance &&
+                (result.status == SolveStatus::Converged || result.status == SolveStatus::ResidualTooLarge)) {
+                refineFactorizedMoment(a0, rhs, momentTolerance, solveSession, result);
+            }
             linalg::requireConverged(result, solver.name());
             return std::move(result.field);
         };
