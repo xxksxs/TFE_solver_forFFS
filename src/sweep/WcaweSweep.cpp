@@ -234,7 +234,8 @@ int WcaweSweep::buildOffline(double expansionFrequencyHz,
     wcaweBuild_ = fastsweep::PolynomialWcaweRecurrence::build(
         polynomial, solveAtExpansion, buildOptions);
     orthogonalizationSec_ = wcaweBuild_.orthogonalizationSec;
-    if (wcaweBuild_.terminationReason == fastsweep::WcaweTerminationReason::SolverFailure) {
+    if (wcaweBuild_.terminationReason == fastsweep::WcaweTerminationReason::SolverFailure ||
+        wcaweBuild_.terminationReason == fastsweep::WcaweTerminationReason::ToleranceExceeded) {
         throw std::runtime_error("WCAWE at " + std::to_string(expansionFrequencyHz)
             + " Hz, RHS " + std::to_string(wcaweBuild_.achievedOrder + 1)
             + ": " + wcaweBuild_.terminationMessage);
