@@ -9,11 +9,11 @@
 
 - **`auto`**（默认）：`BPFEM_USE_MKL` 已定义时返回 `PardisoBackend`，否则返回
   `BiCGStabBackend`。这条路径与 Phase 1 之前的编译期选择字节级一致。
-- **`direct`**：始终返回 `PardisoBackend`。若构建时 `BPFEM_USE_MKL=OFF`，
+- **`pardiso`**：Intel oneMKL 稀疏直接后端，`direct` 为兼容别名。若构建时 `BPFEM_USE_MKL=OFF`，
   在 `solve()` 调用时抛出 runtime_error，提示重新构建或回退到 bicgstab。
 - **`bicgstab`**：始终返回 `BiCGStabBackend`，即使有 MKL。
 - **`gmres`**：复数 GMRES，默认重启长度 30，用 `--gmres-restart` 调整。
-- **`mumps`**：可选复数直接后端。需使用 `-DBPFEM_USE_MUMPS=ON` 配置，支持 `--mumps-mode incore|ooc|blr`。
+- **`mumps`**：复数多波前直接后端，与 PARDISO 并列。需使用 `-DBPFEM_USE_MUMPS=ON` 配置，支持 `--mumps-mode incore|ooc|blr`。
 - PARDISO 可用 `--pardiso-mode incore|ooc`。迭代后端支持 `--iterative-spmv native|mkl`，MKL 路径要求 oneMKL 构建。
 
 实现位于 `src/factory/SparseSolverFactory.cpp::makeSparseSolver(options)`。
@@ -25,8 +25,10 @@
 - **`jacobi`**：对向量应用复对角逆，极小或缺失的对角项使用保护处理。
 - **`ilu0`**：零填充 ILU 因式分解。
 
-- **`schwarz`**：重叠子域预条件。局部后端由 `--schwarz-local-solver pardiso|mumps` 选择，要求相应构建支持。局部 MUMPS 仅支持 `incore` 或 `blr`。
+- **`schwarz`**：重叠子域预条件。局部直接后端由 `--schwarz-local-solver pardiso|mumps` 选择，外层仍由 `--linear-solver` 决定。局部 MUMPS 使用 `--mumps-mode incore|blr`，外存模式用于全局直接求解。
 - **`pardiso-single`** 供 oneMKL 构建的 `--linear-solver gmres` 使用。以单精度全局复数对称因子作右预条件，外层采用双精度 flexible GMRES。每次 Arnoldi 使用的预条件向量保留到解更新，最终用原始双精度矩阵检查真实残差。同一展开点复用数值因子。详见 [混合精度 GMRES 验证](../changes/2026-11-18-iterative-mixed-precision.md)。
+
+全局 `PardisoBackend` 和 `PreconPardisoSingle` 分别实现线性后端接口及预条件接口，共用 `MklPardisoSolver` 的底层分解和回代。
 
 以下是旧版 BP filter 试验记录。适用范围为当时的配置，详细参数待核实。
 
@@ -39,14 +41,17 @@
 
 预条件只对 `bicgstab` / `gmres` 生效。选中 PARDISO 或 MUMPS 时，工厂忽略预条件并输出警告。
 
+`run.json` 和 `timing.json` 的 `linear_solver_family`、`active_preconditioner`、`active_iterative_spmv` 和 `active_schwarz_local_solver` 记录实际配置。直接求解时，后三项均为 `none`。原有 `options` 与计时选项字段保留历史选项编码，完整输入命令可从 `run.json` 的 `cmdline` 查看。
+
 默认使用 PARDISO。已验证的三模 BP filter 可显式指定 `--linear-solver gmres --precon pardiso-single`。ILU(0) 和原 Schwarz 配置在该算例上都曾未收敛。
 
 ### 扫频策略（`--sweep`）
 
-- **`direct`**（默认）：`sweep::DirectSweep`。每个频点重装配，调用选定的全阶线性后端，再后处理。
-  唯一支持 per-frequency VTU 输出的路径。
+- **`direct`**（默认）：逐频装配并求解全阶系统，可搭配直接或迭代后端。棱边坐标使用 `DirectSweep`，分块 TFE 使用 `TfeSweep` 的全阶路径。两者支持逐频场输出。
 - **`alps`**：单点双边 Lanczos–Padé，见 [ALPS 专题](../optimization/alps-sweep/README.md)。
 - **`awe`、`gawe`、`mgawe`、`wcawe`**：详见[工程参考](../engineering-reference.md)和[公式复现](../optimization/awe-family/paper-reproduction.md)。
+
+WCAWE 等降阶策略用线性后端求离线矩。`FactorizedSolveSession::solveWithRefinement` 复用已有直接因子校正回代残差，由 WCAWE 传入矩验收精度。在线阶段求的是降阶系统。
 
 实现位于 `src/factory/SweepStrategyFactory.cpp::makeSweepStrategy(...)`。
 

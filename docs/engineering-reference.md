@@ -14,7 +14,7 @@ AEDTParser + NGMeshParser + PortFaceResolver
 ProjectDefinition + Mesh + EdgeTopology
         |
         v
-PortModeSolver / AnalyticPortBuilder / TransfiniteElementBuilder
+PortModeSolver / AnalyticPortBuilder / TfeSystem
         |
         v
 FEMAssembler -> sparse K/M/port operators + RHS
@@ -63,8 +63,8 @@ bp_fem_solver.exe `
   --aedt <project.aedt> `
   --mesh <mesh.ngmesh> `
   --basis-order 0|1 `
-  --port-method numerical|analytic|tfe|tfe-block `
-  --linear-solver auto|direct|bicgstab|gmres|mumps `
+  --port-method numerical|analytic|numerical-multimode|tfe-block `
+  --linear-solver auto|pardiso|bicgstab|gmres|mumps `
   --sweep direct|awe|gawe|mgawe|wcawe|alps `
   --out result
 ```
@@ -77,10 +77,11 @@ bp_fem_solver.exe `
 | `--mesh` | NGMesh 网格路径 |
 | `--basis-order` | `0` 为 Whitney/Nédélec 零阶棱元，`1` 为一阶层次棱元 |
 | `--max-sweep-points` | 从工程扫频中最多取多少个频点 |
-| `--port-method` | 数值端口、解析 TE10、全边多模端口或原生分块 TFE。分块接口见 [TFE 专题](optimization/transfinite-element/README.md)。 |
-| `--linear-solver` | 自动路由、PARDISO/MUMPS 直接法或迭代法 |
+| `--port-method` | 数值单模、解析 TE10、全棱边数值多模或原生 TFE 分块。历史 `tfe`、`transfinite` 映射为 `numerical-multimode`。见[TFE 专题](optimization/transfinite-element/README.md)。 |
+| `--port-modes` | 全棱边多模和分块 TFE 的每端口模式数量，兼容 `--tfe-modes-per-port`。 |
+| `--linear-solver` | 自动路由、PARDISO/MUMPS 直接后端或 GMRES/BiCGSTAB 迭代后端。历史 `direct` 映射为 `pardiso`。 |
 | `--precon` | `none`、`jacobi`、`ilu0`、`schwarz`，或 oneMKL 构建下专供 GMRES 使用的 `pardiso-single`。见[求解器选择](architecture/solver-selection.md)。 |
-| `--sweep` | 选择直接扫频或快速扫频策略 |
+| `--sweep` | `direct` 表示逐频全阶求解，线性后端由 `--linear-solver` 决定。其余策略使用降阶扫频。 |
 | `--write-all-fields` | 为每个频点写 VTU |
 | `--no-write-all-fields` | 只保留最后频点场，长扫频推荐 |
 | `--field-output-order` | 控制 VTU 采样阶数，不改变 S 参数 |
@@ -97,7 +98,7 @@ bp_fem_solver.exe `
 ```powershell
 .\build_pardiso\Release\bp_fem_solver.exe `
   --aedt IOStructure.aedt --mesh current.ngmesh `
-  --sweep direct --linear-solver direct --out result
+  --sweep direct --linear-solver pardiso --out result
 ```
 
 ### AWE

@@ -8,7 +8,7 @@
 namespace fem {
 
 enum class SweepStrategy {
-    Direct,  // legacy per-frequency direct solve
+    Direct,  // Full-order system at each frequency, with the chosen linear backend.
     Alps,    // Single-point two-sided Lanczos-Pade sweep
     Awe,     // Asymptotic Waveform Evaluation (single-point Padé MVP)
     Gawe,    // Galerkin AWE (single-point moment basis ROM)
@@ -27,20 +27,20 @@ enum class PortMethod {
     // DOFs (bpfem::apm). Kept as a legacy / reference path; aborts on
     // non-rectangular ports.
     Analytic,
-    // Multi-mode transfinite element (bpfem::tfe). Same 2D eigensolve as
-    // Numerical, but keeps the `tfeModesPerPort` lowest physical modes,
-    // each contributing a rank-1 port operator.
-    Transfinite,
+    // Numerical modes feed WavePortBC on the original edge coordinates.
+    NumericalMultimode,
+    Transfinite = NumericalMultimode,  // Legacy source-level alias.
+    // Replace port trace DOFs with modal coordinates in TfeSystem.
     TfeBlock
 };
 
 // Sparse-solver backend selection. Auto mirrors the legacy compile-time
 // choice (PARDISO when built with BPFEM_USE_MKL, else BiCGSTAB) so unchanged
-// CLI invocations keep their existing behavior. Direct / BiCGStab override
-// the choice at runtime.
+// CLI invocations keep their existing behavior.
 enum class LinearSolverKind {
     Auto,
-    Direct,
+    Pardiso,
+    Direct = Pardiso,  // Legacy source-level alias.
     BiCGStab,
     Gmres,
     Mumps

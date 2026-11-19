@@ -53,10 +53,16 @@ struct RunReport {
     std::string workingDirectory;
     std::string sweepStrategyName;
     std::string linearSolverBackend;
+    std::string portFormulation;
+    std::string linearSolverFamily;
+    std::string activePreconditioner = "none";
+    std::string activeIterativeSpmv = "none";
+    std::string activeSchwarzLocalSolver = "none";
 
     // Mirrors Options. Stringified to keep the JSON writer trivial; CI can
     // still grep / regex over these.
     std::vector<std::pair<std::string, std::string>> options;
+    std::string optionValue(const std::string& key) const;
 
     std::vector<PhaseSummary> phases;
     std::vector<FrequencyStat> sweep;
@@ -83,8 +89,7 @@ struct RunReport {
     double factorizedRhsSolveSec = 0.0;
 };
 
-// Populate the report's environment / options sections from a captured
-// RunEnvironment plus the parsed Options. Does not touch phases / sweep.
+// Application-side adapter for populating environment and requested options.
 void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options);
 
 // Write the report to disk. Returns true on success. Hand-rolled JSON; no

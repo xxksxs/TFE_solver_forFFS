@@ -7,6 +7,9 @@
 
 namespace fem::factory {
 
+// Resolves Auto using the available global backends of this build.
+LinearSolverKind resolveLinearSolverKind(LinearSolverKind requested);
+
 // Builds the sparse solver backend that matches Options::linearSolver.
 //
 // Routing rules:
@@ -14,7 +17,7 @@ namespace fem::factory {
 //       prefers PARDISO when this binary is built with BPFEM_USE_MKL,
 //       otherwise falls back to BiCGSTAB. Matches the legacy compile-time
 //       behavior so unchanged invocations keep their old solver choice.
-//   - LinearSolverKind::Direct:
+//   - LinearSolverKind::Pardiso:
 //       returns PARDISO; throws at solve() time if BPFEM_USE_MKL is off.
 //   - LinearSolverKind::BiCGStab:
 //       returns BiCGSTAB unconditionally (forces iterative even on MKL builds).

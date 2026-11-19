@@ -8,7 +8,7 @@
 `--sweep mgawe` 在同一系统上按截止划分子带，对矩阵作二阶 Chebyshev
 插值，在多点生成局部矩并作复对称 Galerkin 降阶。
 
-- 保留模数默认使用 AEDT 的 `NumModes`，可用 `--tfe-modes-per-port N` 覆盖。
+- 保留模数默认使用 AEDT 的 `NumModes`，可用 `--port-modes N` 覆盖。`--tfe-modes-per-port` 为兼容别名。
 - 默认使用工程中的有效入射通道并按独立列求解。`--tfe-source PORT:MODE`
   指定单个单位入射，模态编号从 1 开始。`--tfe-all-sources` 求所有传播列。
 - `s_parameters_modal.csv` 按频率、输入端口/模态和输出端口/模态列出结果。
@@ -26,7 +26,7 @@
 
 后端、IOStructure 全带与深谷工程结果见[联合验收](../../changes/2026-11-18-solver-release-validation.md)，独立分支的历史验证见[TFE 集成记录](../../changes/2026-11-18-tfe-integration.md)。
 
-以下段落记录旧 `--port-method tfe` 的全边坐标多模波端口实现。
+以下段落记录全棱边数值多模的实现。`tfe` 和 `transfinite` 是这条路径的历史别名。
 
 
 > 注：本目录早期版本（理论文档与 README）描述的实际是"解析端口模"（APM）。该内容已迁出到 `../analytic-port/` 子目录，并对应模块 `bpfem::apm`、CLI `--port-method analytic`。
@@ -37,19 +37,19 @@
 - **`tfe-plan.md`**：开发计划与落地记录。包含已合入改动、CLI、性能、不变量、待办、限制。
 - **`README.md`**：当前文件。
 
-## MVP 状态
+## 全棱边数值多模
 
-第一迭代已合入主干。CLI 入口：
+CLI 入口如下。
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --port-method tfe --tfe-modes-per-port 5
+.\build\Release\bp_fem_solver.exe --basis-order 1 --port-method numerical-multimode --port-modes 5
 ```
 
-每个端口面同时纳入 `--tfe-modes-per-port` 个数值本征模（按截止波数排序，最低保留模式 index 0），每个模贡献一个秩-1 端口算子并入全局 H(curl) 矩阵。激励仅施加在主模上；其它模式作为吸收。
+每个端口面保留至多 `--port-modes` 个数值本征模，按截止波数排序。`PortModeSolver` 求本征模，`WavePortBC` 把各模的秩一端口项加到全棱边矩阵。激励施加在主模上。
 
 ## 与 APM 的关系
 
-| 维度 | APM (`--port-method analytic`) | TFE (`--port-method tfe`) |
+| 维度 | APM (`--port-method analytic`) | 全棱边数值多模 (`--port-method numerical-multimode`) |
 |---|---|---|
 | 模式数 | 仅 TE10 | 数值多模 |
 | 端口算子 | 单秩-1 | $\sum_{(m,n)} \mathrm{rank-1}$ |

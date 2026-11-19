@@ -7,6 +7,7 @@
 #include "bpfem/linalg/IterativeOperator.hpp"
 #include "bpfem/linalg/MumpsBackend.hpp"
 #include "bpfem/linalg/PardisoBackend.hpp"
+#include "bpfem/linalg/PreconPardisoSingle.hpp"
 #include "bpfem/linalg/PreconSchwarz.hpp"
 
 #include <cmath>

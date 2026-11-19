@@ -1,12 +1,8 @@
 #include "bpfem/core/RunReport.hpp"
 
-#include "bpfem/app/Application.hpp"
-#include "bpfem/core/RunEnvironment.hpp"
-
 #include <cmath>
+#include <cstdio>
 #include <fstream>
-#include <charconv>
-#include <stdexcept>
 #include <ios>
 #include <iomanip>
 #include <sstream>
@@ -132,112 +128,15 @@ private:
     bool suppressIndent_ = false;
 };
 
-std::string optionValue(const RunReport& report, const std::string& key) {
-    for (const auto& [k, v] : report.options) {
+}  // namespace
+
+std::string RunReport::optionValue(const std::string& key) const {
+    for (const auto& [k, v] : options) {
         if (k == key) {
             return v;
         }
     }
     return {};
-}
-
-std::string formatOption(double value) {
-    char buffer[64];
-    const auto formatted = std::to_chars(buffer, buffer + sizeof(buffer), value);
-    if (formatted.ec != std::errc{}) {
-        throw std::runtime_error("Cannot format a floating-point solver option");
-    }
-    return {buffer, formatted.ptr};
-}
-
-}  // namespace
-
-void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options) {
-    report.solverVersion = env.solverVersion;
-    report.buildString = env.buildString;
-    report.runtimeString = env.runtimeString;
-    report.hostName = env.hostName;
-    report.osDescription = env.osDescription;
-    report.cpuDescription = env.cpuDescription;
-    report.memoryDescription = env.memoryDescription;
-    report.commandLine = env.commandLine;
-    report.workingDirectory = env.workingDirectory;
-
-    auto add = [&](const char* k, const std::string& v) {
-        report.options.emplace_back(k, v);
-    };
-    add("aedt", options.aedt.string());
-    add("mesh", options.mesh.string());
-    add("outDir", options.outDir.string());
-    add("maxSweepPoints", std::to_string(options.maxSweepPoints));
-    add("maxIterations", std::to_string(options.maxIterations));
-    add("basisOrder", std::to_string(options.basisOrder));
-    add("fieldOutputOrder", std::to_string(options.fieldOutputOrder));
-    add("tolerance", formatOption(options.tolerance));
-    add("writeAllFields", options.writeAllFields ? "true" : "false");
-    {
-        std::string s = "direct";
-        switch (options.sweepStrategy) {
-            case SweepStrategy::Direct: s = "direct"; break;
-            case SweepStrategy::Alps:   s = "alps"; break;
-            case SweepStrategy::Awe:    s = "awe"; break;
-            case SweepStrategy::Gawe:   s = "gawe"; break;
-            case SweepStrategy::Mgawe:  s = "mgawe"; break;
-            case SweepStrategy::Wcawe:  s = "wcawe"; break;
-        }
-        add("sweepStrategy", s);
-    }
-    add("alpsOrder", std::to_string(options.alpsOrder));
-    add("alpsExpansionFrequencyHz", std::to_string(options.alpsExpansionFrequencyHz));
-    add("aweOrder", std::to_string(options.aweOrder));
-    add("aweExpansionFrequencyHz", std::to_string(options.aweExpansionFrequencyHz));
-    add("gaweOrder", std::to_string(options.gaweOrder));
-    add("gaweExpansionFrequencyHz", std::to_string(options.gaweExpansionFrequencyHz));
-    add("gaweDropTolerance", formatOption(options.gaweDropTolerance));
-    add("mgawePointCount", std::to_string(options.mgawePointCount));
-    add("mgaweOrder", std::to_string(options.mgaweOrder));
-    add("mgaweDropTolerance", formatOption(options.mgaweDropTolerance));
-    add("wcaweOrder", std::to_string(options.wcaweOrder));
-    add("wcaweExpansionFrequencyHz", std::to_string(options.wcaweExpansionFrequencyHz));
-    add("wcaweDropTolerance", formatOption(options.wcaweDropTolerance));
-    add("portMethod",
-        options.portMethod == PortMethod::Analytic    ? "analytic"
-      : options.portMethod == PortMethod::Transfinite ? "tfe"
-      : options.portMethod == PortMethod::TfeBlock ? "tfe-block"
-                                                       : "numerical");
-    add("tfeModesPerPort", std::to_string(options.tfeModesPerPort));
-    add("tfeSubbandWidthHz", std::to_string(options.tfeSubbandWidthHz));
-    add("tfeProxyDirect", options.tfeProxyDirect ? "true" : "false");
-    {
-        std::string ls = "auto";
-        switch (options.linearSolver) {
-            case LinearSolverKind::Direct:   ls = "direct"; break;
-            case LinearSolverKind::BiCGStab: ls = "bicgstab"; break;
-            case LinearSolverKind::Gmres:    ls = "gmres"; break;
-            case LinearSolverKind::Mumps:    ls = "mumps"; break;
-            case LinearSolverKind::Auto:     ls = "auto"; break;
-        }
-        add("linearSolver", ls);
-    }
-    {
-        std::string p = "none";
-        switch (options.preconditioner) {
-            case PreconditionerKind::Jacobi: p = "jacobi"; break;
-            case PreconditionerKind::Ilu0:   p = "ilu0"; break;
-            case PreconditionerKind::Schwarz: p = "schwarz"; break;
-            case PreconditionerKind::PardisoSingle: p = "pardiso-single"; break;
-            case PreconditionerKind::None:   p = "none"; break;
-        }
-        add("preconditioner", p);
-    }
-    add("gmresRestart", std::to_string(options.gmresRestart));
-    add("iterativeSpmv", options.iterativeMklSpmv ? "mkl" : "native");
-    add("pardisoMode", options.pardisoOutOfCore ? "ooc" : "incore");
-    add("mumpsMode", options.mumpsMode);
-    add("mumpsBlrTolerance", formatOption(options.mumpsBlrTolerance));
-    add("schwarzSubdomains", std::to_string(options.schwarzSubdomains));
-    add("schwarzOverlap", std::to_string(options.schwarzOverlap));
-    add("schwarzLocalSolver", options.schwarzLocalMumps ? "mumps" : "pardiso");
 }
 
 bool writeRunReport(const std::filesystem::path& path, const RunReport& report) {
@@ -260,6 +159,11 @@ bool writeRunReport(const std::filesystem::path& path, const RunReport& report) 
       w.key("cwd");              w.value(report.workingDirectory);
       w.key("sweep_strategy");   w.value(report.sweepStrategyName);
       w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
+      w.key("port_formulation"); w.value(report.portFormulation);
+      w.key("linear_solver_family"); w.value(report.linearSolverFamily);
+      w.key("active_preconditioner"); w.value(report.activePreconditioner);
+      w.key("active_iterative_spmv"); w.value(report.activeIterativeSpmv);
+      w.key("active_schwarz_local_solver"); w.value(report.activeSchwarzLocalSolver);
       w.key("offline_build_s"); w.value(report.offlineBuildSec);
       w.key("port_linearization_s"); w.value(report.portLinearizationSec);
       w.key("lanczos_operator_s"); w.value(report.lanczosOperatorSec);
@@ -348,17 +252,22 @@ bool writeTimingReport(const std::filesystem::path& path, const RunReport& repor
       w.key("schema");              w.value(1);
       w.key("status");              w.value(report.status);
       w.key("algorithm");           w.value(report.sweepStrategyName.empty()
-                                              ? optionValue(report, "sweepStrategy")
+                                              ? report.optionValue("sweepStrategy")
                                               : report.sweepStrategyName);
-      w.key("basis_order");         w.value(optionValue(report, "basisOrder"));
-      w.key("max_sweep_points");    w.value(optionValue(report, "maxSweepPoints"));
-      w.key("linear_solver");       w.value(optionValue(report, "linearSolver"));
-      w.key("pardiso_mode");        w.value(optionValue(report, "pardisoMode"));
-      w.key("mumps_mode");          w.value(optionValue(report, "mumpsMode"));
-      w.key("iterative_spmv");      w.value(optionValue(report, "iterativeSpmv"));
-      w.key("schwarz_local_solver"); w.value(optionValue(report, "schwarzLocalSolver"));
+      w.key("basis_order");         w.value(report.optionValue("basisOrder"));
+      w.key("max_sweep_points");    w.value(report.optionValue("maxSweepPoints"));
+      w.key("linear_solver");       w.value(report.optionValue("linearSolver"));
+      w.key("pardiso_mode");        w.value(report.optionValue("pardisoMode"));
+      w.key("mumps_mode");          w.value(report.optionValue("mumpsMode"));
+      w.key("iterative_spmv");      w.value(report.optionValue("iterativeSpmv"));
+      w.key("schwarz_local_solver"); w.value(report.optionValue("schwarzLocalSolver"));
       w.key("linear_solver_backend"); w.value(report.linearSolverBackend);
-      w.key("preconditioner");      w.value(optionValue(report, "preconditioner"));
+      w.key("preconditioner");      w.value(report.optionValue("preconditioner"));
+      w.key("port_formulation"); w.value(report.portFormulation);
+      w.key("linear_solver_family"); w.value(report.linearSolverFamily);
+      w.key("active_preconditioner"); w.value(report.activePreconditioner);
+      w.key("active_iterative_spmv"); w.value(report.activeIterativeSpmv);
+      w.key("active_schwarz_local_solver"); w.value(report.activeSchwarzLocalSolver);
       w.key("offline_build_s");      w.value(report.offlineBuildSec);
       w.key("port_linearization_s"); w.value(report.portLinearizationSec);
       w.key("lanczos_operator_s");   w.value(report.lanczosOperatorSec);

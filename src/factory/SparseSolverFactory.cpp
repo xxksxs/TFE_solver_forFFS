@@ -6,6 +6,7 @@
 #include "bpfem/linalg/PardisoBackend.hpp"
 #include "bpfem/linalg/PreconIlu0.hpp"
 #include "bpfem/linalg/PreconJacobi.hpp"
+#include "bpfem/linalg/PreconPardisoSingle.hpp"
 #include "bpfem/linalg/PreconSchwarz.hpp"
 
 #include <iostream>
@@ -69,11 +70,29 @@ void warnPreconIgnored(PreconditionerKind kind, const char* backendName) {
               << backendName << "' (preconditioning is iterative-solver only)\n";
 }
 
+void warnDirectOptions(const Options& options, const char* backendName) {
+    warnPreconIgnored(options.preconditioner, backendName);
+    if (options.iterativeMklSpmv) {
+        std::cerr << "[warn] --iterative-spmv mkl applies to GMRES/BiCGSTAB; "
+                  << backendName << " uses its own sparse kernels\n";
+    }
+}
+
 }  // namespace
 
+LinearSolverKind resolveLinearSolverKind(LinearSolverKind requested) {
+    if (requested != LinearSolverKind::Auto) return requested;
+#ifdef BPFEM_USE_MKL
+    return LinearSolverKind::Pardiso;
+#else
+    return LinearSolverKind::BiCGStab;
+#endif
+}
+
 std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) {
+    const auto selected = resolveLinearSolverKind(options.linearSolver);
     if (options.preconditioner == PreconditionerKind::PardisoSingle
-        && options.linearSolver != LinearSolverKind::Gmres) {
+        && selected != LinearSolverKind::Gmres) {
         throw std::invalid_argument("--precon pardiso-single requires --linear-solver gmres");
     }
 #ifndef BPFEM_USE_MKL
@@ -85,9 +104,8 @@ std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) 
 #ifndef BPFEM_USE_MKL
         throw std::invalid_argument("--pardiso-mode ooc requires a build with Intel oneMKL");
 #else
-        if (options.linearSolver != LinearSolverKind::Direct
-            && options.linearSolver != LinearSolverKind::Auto) {
-            throw std::invalid_argument("--pardiso-mode ooc requires --linear-solver direct or auto");
+        if (selected != LinearSolverKind::Pardiso) {
+            throw std::invalid_argument("--pardiso-mode ooc requires PARDISO (--linear-solver pardiso or auto)");
         }
 #endif
     }
@@ -110,27 +128,22 @@ std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) 
         return backend;
     };
 
-    switch (options.linearSolver) {
-        case LinearSolverKind::Direct:
-            warnPreconIgnored(options.preconditioner, "PARDISO");
+    switch (selected) {
+        case LinearSolverKind::Pardiso:
+            warnDirectOptions(options, "PARDISO");
             return std::make_unique<linalg::PardisoBackend>(options.pardisoOutOfCore);
         case LinearSolverKind::BiCGStab:
             return buildBiCGStab();
         case LinearSolverKind::Gmres:
             return buildGmres();
         case LinearSolverKind::Mumps:
-            warnPreconIgnored(options.preconditioner, "MUMPS");
+            warnDirectOptions(options, "MUMPS");
             return std::make_unique<linalg::MumpsBackend>(
                 mumpsMode(options), options.mumpsBlrTolerance, options.outDir);
         case LinearSolverKind::Auto:
-        default:
-#ifdef BPFEM_USE_MKL
-            warnPreconIgnored(options.preconditioner, "PARDISO");
-            return std::make_unique<linalg::PardisoBackend>(options.pardisoOutOfCore);
-#else
-            return buildBiCGStab();
-#endif
+            break;
     }
+    throw std::logic_error("Unresolved linear solver selection");
 }
 
 }  // namespace fem::factory

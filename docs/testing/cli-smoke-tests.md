@@ -81,22 +81,27 @@
 
 如果材料含 σ > 0 的导率，会立即抛错并提示改用 `--sweep direct`。这是 MVP 阶段的 lossless 限定，详见 `../optimization/alps-sweep/plan.md` §7。
 
-## TFE（超限元，多模端口）烟测
+## 全棱边数值多模烟测
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --port-method tfe --tfe-modes-per-port 5 --no-write-all-fields --out result
+.\build\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 5 --port-method numerical-multimode --port-modes 5 --no-write-all-fields --out result
 ```
 
 期望结果：
 
 - 程序成功退出。
-- 日志显示 `Port-mode method: transfinite (TFE numerical eigenmodes, 5 modes/port)`。
-- 日志显示每个端口的 `rectangular dimensions (informational): a=… mm, b=… mm` 与 `TFE retained modes: 5`。
-- 写出的 `s_parameters.csv` 与 `--port-method numerical` 在 TE10 主模主导频段偏差通常 < 0.1 dB；S11 deep nulls 和接近 TE20 截止的频段（41.6 GHz）可能偏差 ~ 0.5 dB（多模 TFE 物理上更准）。
-- `--tfe-modes-per-port 1` 时 S 参数与 `--port-method numerical`（默认）等价到机器精度，二者共用同一二维 H(curl) 本征求解。
-- 与 `--sweep alps` 组合使用时（`--port-method tfe --sweep alps --alps-order 12`），ALPS 自动按 (face, mode) 展开虚拟端口，扫频结果与 `--sweep direct` 一致到 ~1e-11。
+- 日志显示 `Port-mode method: numerical-multimode (full edge coordinates, 5 modes/port)`。
+- 日志记录端口的矩形尺寸及 `retained numerical modes`，报告的 `port_formulation` 为 `numerical-multimode`。
+- `--port-modes 1` 时与 `--port-method numerical` 的 S 参数一致。两者共用二维 H(curl) 本征求解。
+- 用同一设置的 `--port-method tfe --tfe-modes-per-port 5` 复跑，核对 S 参数与当前名称一致。
 
-非矩形截面端口同样可用：TFE 的 `rectangular detection` 仅作信息日志，本征求解器直接吃端口面三角网。
+非矩形截面使用端口面三角网求本征模。矩形检测用于尺寸报告。
+
+## 求解后端与预条件报告
+
+- 用 `--sweep direct --linear-solver mumps` 检查 `linear_solver_family=direct` 和 `linear_solver_backend=MUMPS`。
+- 用 `--sweep direct --linear-solver gmres --precon schwarz --schwarz-local-solver mumps` 检查 `linear_solver_family=iterative`、`active_preconditioner=schwarz`、`active_schwarz_local_solver=mumps`。
+- `--linear-solver pardiso` 与兼容别名 `direct` 使用同一种线性后端。与 `--sweep direct` 组合时可分别核对这两层的选择。
 
 ## NPM（数值端口模，默认）烟测
 

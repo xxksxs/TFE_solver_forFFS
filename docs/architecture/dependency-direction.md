@@ -19,11 +19,9 @@ app
  |-- post
 
 factory
- |-- bc              (Application 注册 BCs 时；factory 本身不实例化 BCs，
- |                   只实例化 solver / sweep；BCs 由 Application 自己 push_back)
  |-- linalg
  |-- sweep
- |-- app             (只为读 Options 字段；不调用 runApplication)
+ |-- app             (读取 Options)
 
 bc
  |-- core
@@ -32,9 +30,14 @@ bc
 
 sweep
  |-- core
- |-- fem             (AlpsSweep 直接调 assembler.buildAffineSystem)
- |-- linalg          (ISparseSolver；ALPS offline 通过接口注入求解器)
+ |-- fem, tfe        (提供对应端口离散的矩阵和右端项)
+ |-- fastsweep       (构基、投影、近似求值)
+ |-- linalg          (ISparseSolver 与因子复用)
  |-- post            (DirectSweep 调 ResultExtractor)
+
+fastsweep
+ |-- core, linalg    (多项式、矩递推与数值运算)
+ |-- fem, bc, tfe    (将体和端口模型转成扫频算子)
 
 linalg
  |-- core            (Types / Constants)
@@ -55,7 +58,7 @@ apm
 tfe
  |-- core
  |-- fem
- |-- apm             (复用 RectPortGeometry 和几何探测器)
+ |-- apm             (兼容接口的矩形端口探测)
 
 post
  |-- core
@@ -68,9 +71,10 @@ io
 ## 设计原则
 
 - **`core` 是最底层**：共享类型、常量、日志、工具，被几乎所有其它模块使用。
+- **CLI 选项由 `app` 转换为报告字段**。`core/RunReport.cpp` 序列化已经准备好的数据。
 - **`io` 只填充数据结构**：不做 FEM 计算，不依赖 `fem`。
 - **`linalg` 不知 `fem` / `app`**：求解器 / 预条件不知道 H(curl)，不知道 CLI。
-  它们看到的就是 `SparseMatrix * x = b`。
+  它们处理 `SparseMatrix * x = b`、因子复用和残差校正。扫频层选择每个步骤的验收容差。
 - **`bc` 不知 `app`**：边界条件不依赖 CLI；只依赖 fem / linalg 的对外接口。
 - **`sweep` 是 fem + linalg + post 的编排层**：策略类不知道 CLI，但需要装配
   和求解能力。

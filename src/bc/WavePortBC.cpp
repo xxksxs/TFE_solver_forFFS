@@ -14,7 +14,7 @@ double wavePortAdmittance(double k0Squared, double cutoffSquared) {
 
 namespace {
 
-// Apply one analytic mode of a port: rank-1 update on `matrix` plus optional
+// Apply one port mode: rank-one update on `matrix` plus optional
 // incident-amplitude contribution on `rhs`. Mirrors the legacy
 // FEMAssembler::applyWavePorts inner lambda 1:1 so output stays bit-for-bit
 // identical for the existing default path.
@@ -59,9 +59,8 @@ void WavePortBC::apply(SparseMatrix& matrix,
                        std::vector<std::complex<double>>& rhs,
                        const AssemblyContext& ctx) const {
     for (const auto& port : ctx.project.ports) {
-        // TFE multi-mode path: each analytic mode contributes a rank-1 port
-        // operator. Only the excitation mode of an excited project port
-        // carries an incident amplitude; the other modes are pure absorbers.
+        // Full-edge multimode path: each numerical mode contributes a rank-one
+        // operator. The designated mode of an excited port adds incident amplitude.
         if (const auto* multi = ctx.portModeSolver.multiMode(port.faceId); multi != nullptr) {
             for (std::size_t mIdx = 0; mIdx < multi->modes.size(); ++mIdx) {
                 const bool isExcited = port.excited

@@ -1,67 +1,31 @@
 # 模块布局
 
-本工程采用"可复用静态库 + 轻量命令行入口"的结构。Phase 1 接口化 (见
-`docs/optimization/strategy-interfaces/plan.md`) 之后，*策略选择* 全部走
-工厂 + 抽象接口，新增策略只动新文件 + 工厂的一行注册，不再触碰 Application
-和核心装配。
+`bp_fem_solver` 是命令行入口，链接承载各模块实现的 `bp_fem_core` 静态库。下面的三项选择由不同模块处理。
 
-## 顶层目标
+| 选择 | 负责的问题 | 源码入口 |
+| --- | --- | --- |
+| `--port-method` | 端口的离散表示和边界装配 | `PortModeSolver`、`AnalyticPortBuilder`、`WavePortBC`、`TfeSystem` |
+| `--sweep` | 逐频求解全阶系统，或用展开点构造降阶模型 | `SweepStrategyFactory`、`ISweepStrategy` |
+| `--linear-solver` / `--precon` | 全阶稀疏方程的求解后端及外层迭代的预条件 | `SparseSolverFactory`、`ISparseSolver`、`IPreconditioner` |
 
-- **`bp_fem_core`**：单一静态库，包含解析、FEM 装配、边界条件、线性代数、
-  扫频策略、降阶模型、后处理。
-- **`bp_fem_solver`**：链接 `bp_fem_core` 的 CLI 程序。
+`--sweep direct` 对各频点保留全阶问题，可搭配 PARDISO、MUMPS、GMRES 和 BiCGSTAB。WCAWE 通过同一个线性接口构造离线矩，在线求解降阶矩阵。原生 `tfe-block` 替换端口迹自由度，支持全阶扫频和分段二阶 MGAWE。历史 `tfe` 入口对应 `numerical-multimode` 全棱边路径。[求解器选择](solver-selection.md) · [TFE 专题](../optimization/transfinite-element/README.md)
 
-## 目录结构
+## 源码职责
 
-```text
-include/bpfem/
-  app/        命令行应用门面 (Options + runApplication)
-  core/       常量、数学、共享类型、日志、工具
-  io/         AEDT 与 NGMesh 输入前端
-  fem/        Nedelec 边拓扑、curl-curl 装配、PortModeSolver (NPM)
-  bc/         IBoundaryCondition 抽象 + WavePortBC + Absorbing/Impedance/FiniteConductor 占位
-  linalg/     稀疏矩阵 + ISparseSolver / IPreconditioner 抽象 + 后端实现
-  sweep/      ISweepStrategy 抽象 + DirectSweep + AlpsSweep
-  factory/    SparseSolverFactory + SweepStrategyFactory（按 Options 路由）
-  apm/        解析端口模 (Analytic Port Mode)
-  tfe/        超限元端口模 (Transfinite Element)
-  mor/        [DEPRECATED] AlpsSweep 旧路径，转发到 sweep/
-  post/       S 参数提取 + VTU/CSV 输出
+| 目录 | 职责 |
+| --- | --- |
+| `app/` | 解析 CLI、串起读取到导出的流程、记录请求参数和实际配置。 |
+| `factory/` | 将配置解析为稀疏后端和扫频策略。 |
+| `core/` | 常量、共享数据、日志与通用报告序列化。CLI 选项到报告的转换在 `app/RunReportOptions.cpp`。 |
+| `io/` | AEDT 与 NGMesh 输入及端口面映射。 |
+| `fem/` | 棱元拓扑、体矩阵和数值波导本征模。`FEMAssembler` 通过 `IBoundaryCondition` 添加边界项。 |
+| `bc/` | 棱边坐标下的边界项。`WavePortBC` 支持单模及多模秩一更新。 |
+| `apm/` | 矩形端口几何识别和解析 TE10 模。 |
+| `tfe/` | `TfeSystem` 在模态迹坐标装配并恢复全棱边场。旧 `TransfiniteElementBuilder` 名称保留作 API 兼容。 |
+| `linalg/` | 稀疏矩阵、直接和迭代后端、预条件、因子复用及真实残差校正。PARDISO 与 MUMPS 可作为全局直接后端，也可当 Schwarz 的局部直接后端。 |
+| `fastsweep/` | 多项式、矩递推、正交化、Padé 和 Galerkin 等扫频数值组件。 |
+| `sweep/` | 组合同一端口模型与指定线性后端，管理展开点、构基和在线求值。通过 `SweepContext` 回调传递场与统计量。 |
+| `post/` | S 参数提取及 VTU、CSV 输出。 |
+| `mor/` | 旧 ALPS 头文件的兼容转发。 |
 
-src/                       镜像 include 目录
-src/main.cpp               轻量入口，调用 fem::runApplication
-```
-
-## 模块职责
-
-- **`app`**：CLI 参数解析；端到端 setup + 调用工厂 + 调用 sweep。**不**做策略
-  分发——策略选择全部委托给 `factory/*Factory`。
-- **`core`**：共享常量、共享类型、日志、工具函数。无外部依赖。
-- **`io`**：把 AEDT 和 NGMesh 文件转换为内部数据结构。**不**做 FEM 计算。
-- **`fem`**：电磁离散、`PortModeSolver` (NPM 数值端口模) 和体积装配。
-  `FEMAssembler::setBoundaryConditions(...)` 接收 `IBoundaryCondition` 列表，
-  `assemble` / `sparsityPattern` / `buildAffineSystem` 通过列表分发，**不**硬编码
-  wave port 概念。
-- **`bc`**：边界条件抽象层。`WavePortBC` 是当前唯一的具体实现，封装现 NPM/APM/TFE
-  的多模波端口装配。`AbsorbingBC` / `ImpedanceBC` / `FiniteConductorBC` 是已注册
-  到构建系统的占位骨架，等待具体实现。
-- **`linalg`**：稀疏矩阵存储 (`SparseMatrix`)、抽象求解器 (`ISparseSolver`) 和抽象
-  预条件 (`IPreconditioner`)、具体后端 (`PardisoBackend` / `BiCGStabBackend` /
-  `PreconJacobi`)。CMake 宏 `BPFEM_USE_MKL` 仅在 `factory/SparseSolverFactory.cpp`
-  内部参与 Auto 路由。后端及端口本征求解也有各自的编译条件。
-- **`sweep`**：扫频策略抽象。`DirectSweep` (per-freq assemble + solve)；
-  `AlpsSweep`（单展开点双边 Lanczos–Padé）以及 AWE、GAWE、MGAWE 和 WCAWE。`SweepContext` 携带一个 `onFieldSolved`
-  回调让 Application 提供 VTU 写出钩子，避免 Sweep 与 OutputWriter 直接耦合。
-- **`factory`**：根据 `Options` 实例化具体策略。**唯一**包含 `BPFEM_USE_MKL`
-  分支的求解器路由代码就在这里。
-- **`apm` / `tfe`**：端口模式建立路径。把得到的 `PortMode` / `MultiPortMode`
-  注入 `PortModeSolver` 缓存；`WavePortBC::apply` 在装配时读取。
-- **`mor`**：deprecated 别名层；保留一个 release 周期。新代码应直接 include
-  `bpfem/sweep/AlpsSweep.hpp`。
-- **`post`**：S 参数提取 (`ResultExtractor`) 和场输出 (`OutputWriter`)。
-
-## 入口约束
-
-`src/main.cpp` 应保持精简，只调用 `fem::runApplication(argc, argv)`。
-`Application::runApplication` 主体本身已瘦身：策略分发占 < 10 行，剩余是
-io / port-mode setup / 结果导出。
+新增配置或改动接线时，同时核对实际后端、已启用的预条件与端口表示。详见[依赖方向](dependency-direction.md)和[修改规范](../development-workflow/change-policy.md)。

@@ -20,7 +20,6 @@
 #include "bpfem/post/ResultExtractor.hpp"
 #include "bpfem/sweep/ISweepStrategy.hpp"
 #include "bpfem/apm/AnalyticPortBuilder.hpp"
-#include "bpfem/tfe/TransfiniteElementBuilder.hpp"
 #include "bpfem/tfe/TfeSystem.hpp"
 
 #include <algorithm>
@@ -270,18 +269,18 @@ Options parseOptions(int argc, char** argv) {
                 options.portMethod = PortMethod::Numerical;
             } else if (m == "analytic") {
                 options.portMethod = PortMethod::Analytic;
-            } else if (m == "tfe" || m == "transfinite") {
-                options.portMethod = PortMethod::Transfinite;
+            } else if (m == "numerical-multimode" || m == "tfe" || m == "transfinite") {
+                options.portMethod = PortMethod::NumericalMultimode;
             } else if (m == "tfe-block") {
                 options.portMethod = PortMethod::TfeBlock;
             } else {
-                throw std::runtime_error("--port-method must be numerical, analytic, tfe, or tfe-block");
+                throw std::runtime_error("--port-method must be numerical, analytic, numerical-multimode or tfe-block");
             }
-        } else if (arg == "--tfe-modes-per-port") {
+        } else if (arg == "--port-modes" || arg == "--tfe-modes-per-port") {
             options.tfeModesSpecified = true;
             options.tfeModesPerPort = std::stoi(requireValue(arg));
             if (options.tfeModesPerPort < 1) {
-                throw std::runtime_error("--tfe-modes-per-port must be >= 1");
+                throw std::runtime_error(arg + " must be >= 1");
             }
         } else if (arg == "--tfe-all-sources") {
             options.tfeAllSources = true;
@@ -312,8 +311,8 @@ Options parseOptions(int argc, char** argv) {
             const std::string m = requireValue(arg);
             if (m == "auto") {
                 options.linearSolver = LinearSolverKind::Auto;
-            } else if (m == "direct") {
-                options.linearSolver = LinearSolverKind::Direct;
+            } else if (m == "pardiso" || m == "direct") {
+                options.linearSolver = LinearSolverKind::Pardiso;
             } else if (m == "bicgstab") {
                 options.linearSolver = LinearSolverKind::BiCGStab;
             } else if (m == "gmres") {
@@ -321,7 +320,7 @@ Options parseOptions(int argc, char** argv) {
             } else if (m == "mumps") {
                 options.linearSolver = LinearSolverKind::Mumps;
             } else {
-                throw std::runtime_error("--linear-solver must be auto, direct, bicgstab, gmres or mumps");
+                throw std::runtime_error("--linear-solver must be auto, pardiso, bicgstab, gmres or mumps");
             }
         } else if (arg == "--pardiso-mode") {
             const auto mode = requireValue(arg);
@@ -394,11 +393,13 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10] [--mgawe-adaptive|--mgawe-2001]\n"
                       << "                     [--mgawe-expansion <Hz> <order>] (repeatable)\n"
                       << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12] [--wcawe-check-moments]\n"
-                      << "                     [--port-method numerical|analytic|tfe|tfe-block] [--tfe-modes-per-port N]\n"
+                      << "                     [--port-method numerical|analytic|numerical-multimode|tfe-block] [--port-modes N]\n"
+                      << "                     (legacy port aliases: tfe, transfinite = numerical-multimode)\n"
+                      << "                     (--tfe-modes-per-port is an alias for --port-modes)\n"
                       << "                     [--tfe-all-sources | --tfe-source PORT:MODE] (tfe-block)\n"
                       << "                     [--tfe-proxy-direct] [--tfe-subband-width HZ] (tfe-block with --sweep mgawe)\n"
                       << "                     [--tfe-exact-band LOW_HZ HIGH_HZ] (repeatable, tfe-block MGAWE)\n"
-                      << "                     [--linear-solver auto|direct|bicgstab|gmres|mumps]\n"
+                      << "                     [--linear-solver auto|pardiso|bicgstab|gmres|mumps] (direct = pardiso)\n"
                       << "                     [--precon none|jacobi|ilu0|schwarz|pardiso-single]\n"
                       << "                     [--gmres-restart 30]\n"
                       << "                     [--iterative-spmv native|mkl]\n"
@@ -416,10 +417,9 @@ Options parseOptions(int argc, char** argv) {
 // Top-level driver:
 //   1. Parse Options.
 //   2. Load AEDT project + NGMesh.
-//   3. Build EdgeTopology + PortModeSolver, populate per-port modes via the
-//      requested port-method strategy (analytic APM or numerical multi-mode TFE).
-//   4. Construct FEMAssembler and register the boundary-condition list
-//      (currently always [WavePortBC]; future BCs are appended here).
+//   3. Build EdgeTopology and select the port formulation.
+//   4. Construct FEMAssembler with WavePortBC for edge-coordinate ports,
+//      or pass its volume system through TfeSystem for modal trace replacement.
 //   5. Pull a sparse-solver backend and a sweep strategy from the factories.
 //   6. Run the sweep strategy with a SweepContext; the strategy decides
 //      whether per-frequency VTU output is meaningful and either invokes
@@ -531,8 +531,8 @@ int runApplication(int argc, char** argv) {
             case PortMethod::TfeBlock:
                 portMethodName = "TFE block (modal trace replacement)";
                 break;
-            case PortMethod::Transfinite:
-                portMethodName = "transfinite (TFE numerical eigenmodes, "
+            case PortMethod::NumericalMultimode:
+                portMethodName = "numerical-multimode (full edge coordinates, "
                                  + std::to_string(options.tfeModesPerPort) + " modes/port)";
                 break;
             case PortMethod::Analytic:
@@ -580,12 +580,10 @@ int runApplication(int argc, char** argv) {
                          + std::to_string(geo.b * 1.0e3) + " mm");
                 portModeSolver.setPrecomputed(port.faceId, apmBuilder.build(port.faceId));
             }
-        } else if (options.portMethod == PortMethod::Transfinite) {
-            tfe::TfeOptions tfeOpts;
-            tfeOpts.modesPerPort = options.tfeModesPerPort;
-            tfe::TransfiniteElementBuilder tfeBuilder(mesh, topology, portModeSolver, tfeOpts);
+        } else if (options.portMethod == PortMethod::NumericalMultimode) {
+            apm::AnalyticPortBuilder rectDetector(mesh, topology);
             for (const auto& port : project.ports) {
-                const auto geo = tfeBuilder.detectRectangular(port.faceId);
+                const auto geo = rectDetector.detectRectangular(port.faceId);
                 if (geo.valid) {
                     log.info("Port face " + std::to_string(port.faceId) + " rectangular dimensions (informational): a="
                              + std::to_string(geo.a * 1.0e3) + " mm, b="
@@ -594,8 +592,8 @@ int runApplication(int argc, char** argv) {
                     log.info("Port face " + std::to_string(port.faceId)
                              + " rectangular detection skipped; using numerical eigenmodes only");
                 }
-                MultiPortMode multi = tfeBuilder.build(port.faceId);
-                log.info("Port face " + std::to_string(port.faceId) + " TFE retained modes: "
+                MultiPortMode multi = portModeSolver.computeMultiMode(port.faceId, options.tfeModesPerPort);
+                log.info("Port face " + std::to_string(port.faceId) + " retained numerical modes: "
                          + std::to_string(multi.modes.size()));
                 for (std::size_t k = 0; k < multi.modes.size(); ++k) {
                     log.info("  mode " + std::to_string(k) + ": k_c^2="
@@ -633,17 +631,20 @@ int runApplication(int argc, char** argv) {
         ResultExtractor extractor(project, portModeSolver);
         std::unique_ptr<linalg::ISparseSolver> sparseSolver = factory::makeSparseSolver(options);
         report.linearSolverBackend = sparseSolver->name();
-        log.info("Linear solver backend: " + std::string(sparseSolver->name()));
-        if (options.preconditioner != PreconditionerKind::None) {
-            std::string preconName = "?";
-            switch (options.preconditioner) {
-                case PreconditionerKind::Jacobi: preconName = "Jacobi"; break;
-                case PreconditionerKind::Ilu0:   preconName = "ILU(0)"; break;
-                case PreconditionerKind::Schwarz: preconName = "Schwarz"; break;
-                case PreconditionerKind::PardisoSingle: preconName = "PARDISO single"; break;
-                case PreconditionerKind::None:   break;
+        const auto selectedSolver = factory::resolveLinearSolverKind(options.linearSolver);
+        const bool iterative = selectedSolver == LinearSolverKind::Gmres || selectedSolver == LinearSolverKind::BiCGStab;
+        report.linearSolverFamily = iterative ? "iterative" : "direct";
+        log.info("Linear solver backend: " + report.linearSolverBackend + " (" + report.linearSolverFamily + ")");
+        if (iterative) {
+            report.activePreconditioner = report.optionValue("preconditioner");
+            report.activeIterativeSpmv = report.optionValue("iterativeSpmv");
+            if (options.preconditioner != PreconditionerKind::None) {
+                log.info("Preconditioner: " + report.activePreconditioner);
             }
-            log.info("Preconditioner: " + preconName);
+            if (options.preconditioner == PreconditionerKind::Schwarz) {
+                report.activeSchwarzLocalSolver = report.optionValue("schwarzLocalSolver");
+                log.info("Schwarz local direct solver: " + report.activeSchwarzLocalSolver);
+            }
         }
         auto sweepStrategy = factory::makeSweepStrategy(options, project, assembler, portModeSolver,
                                                          tfeSystem.get());

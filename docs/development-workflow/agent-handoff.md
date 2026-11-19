@@ -19,7 +19,7 @@
 以下是接手线索。每次开工以实际的 `git status`、源码和变更记录为准。
 
 - AWE 逐场 Padé、MGAWE 2001/自适应模式与高阶 WCAWE 已在工作树接入。WCAWE 的离线和在线共用一套多项式。做矩验证时使用 `--wcawe-check-moments`。做性能计时时关闭该验证并单独记其开销。
-- `tfe` 在端口网格上求多个数值本征模，再装配波端口项。`tfe-block` 使用模态自由度替换，提供 Direct、分段二阶 MGAWE 和指定精确频段。
+- `numerical-multimode` 在端口网格上求多个数值本征模，并以全棱边坐标装配波端口项，兼容历史 `tfe` 参数。`tfe-block` 使用模态自由度替换，提供逐频全阶求解、分段二阶 MGAWE 和指定精确频段。[模块布局](../architecture/module-layout.md)
 - MUMPS、Schwarz、MKL SpMV、PARDISO 外存和混合精度 GMRES 由[求解器选择](../architecture/solver-selection.md)统一说明。根据构建组合复核依赖与测试。
 - 版本固化、发布门槛和复现配置见[发布验收规范](../testing/release-validation.md)。切换分支或集成前先核对其他任务在工作树里的改动。
 
@@ -31,7 +31,7 @@
 cmake -S . -B build_agent_pardiso -DBPFEM_USE_MKL=ON
 cmake --build build_agent_pardiso --config Release
 ctest --test-dir build_agent_pardiso -C Release --output-on-failure
-.\build_agent_pardiso\Release\bp_fem_solver.exe --aedt IOStructure.aedt --mesh current.ngmesh --basis-order 0 --port-method numerical --sweep direct --linear-solver direct --max-sweep-points 1 --no-write-all-fields --out result_agent_smoke
+.\build_agent_pardiso\Release\bp_fem_solver.exe --aedt IOStructure.aedt --mesh current.ngmesh --basis-order 0 --port-method numerical --sweep direct --linear-solver pardiso --max-sweep-points 1 --no-write-all-fields --out result_agent_smoke
 ```
 
 检查 `result_agent_smoke/result_DIRECT/` 下的 `s_parameters.csv`、`run.json` 和 `timing.json`。单点烟测使用工程设置频率 95 GHz。宽带基准为同一 AEDT 和网格的 90–100 GHz、101 点。定量精度比较使用同网格 Direct 的复数 S 参数。仓库的 `IOStructure_S_parameters.csv` 提供 HFSS 幅值参考。对比应为每次运行指定独立 `--out`，同一策略会重建其结果子目录。复现算法命令见[公式复现](../optimization/awe-family/paper-reproduction.md)。

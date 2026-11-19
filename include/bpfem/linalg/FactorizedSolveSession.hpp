@@ -52,6 +52,34 @@ public:
         return result;
     }
 
+    // Use the original matrix to check a fixed-matrix solve and correct it
+    // with the same factors. Iterative backends use their existing solver.
+    SolveResult solveWithRefinement(const std::vector<std::complex<double>>& rhs, double tolerance) {
+        auto result = solve(rhs);
+        if (!reusesFactorization()) return result;
+        const double target = std::min(tolerance, config_.tolerance);
+        if (result.status == SolveStatus::Unchecked) checkResidual(matrix_, rhs, target, result);
+        if (!(result.residual > target) ||
+            (result.status != SolveStatus::Converged && result.status != SolveStatus::ResidualTooLarge)) {
+            return result;
+        }
+
+        result.status = SolveStatus::ResidualTooLarge;
+        constexpr int maxCorrections = 2;
+        for (int step = 0; step < maxCorrections && result.status == SolveStatus::ResidualTooLarge; ++step) {
+            const double previous = result.residual;
+            auto residual = matrix_.multiply(result.field);
+            for (std::size_t i = 0; i < rhs.size(); ++i) residual[i] = rhs[i] - residual[i];
+            auto correction = solve(residual);
+            updateResidual(residual, correction);
+            if (correction.status != SolveStatus::Converged && correction.status != SolveStatus::ResidualTooLarge) break;
+            for (std::size_t i = 0; i < rhs.size(); ++i) result.field[i] += correction.field[i];
+            checkResidual(matrix_, rhs, target, result);
+            if (result.residual >= previous) break;
+        }
+        return result;
+    }
+
     // 对同一矩阵批量求解多个 RHS，并统一补算全阶相对残差。
     std::vector<SolveResult> solveBatch(
         const std::vector<std::vector<std::complex<double>>>& rhsList) {

@@ -15,6 +15,7 @@ and VTK_QUADRATIC_TETRA (type 24) at order 2. Order 3 is ParaView-only."
 
 add_library(bp_fem_core STATIC
     src/app/Application.cpp
+    src/app/RunReportOptions.cpp
     src/apm/AnalyticPortBuilder.cpp
     src/bc/AbsorbingBC.cpp
     src/bc/FiniteConductorBC.cpp
@@ -57,6 +58,7 @@ add_library(bp_fem_core STATIC
     src/linalg/PreconIlu0.cpp
     src/linalg/PreconJacobi.cpp
     src/linalg/PreconSchwarz.cpp
+    src/linalg/PreconPardisoSingle.cpp
     src/linalg/SparseMatrix.cpp
     src/post/OutputWriter.cpp
     src/post/ResultExtractor.cpp

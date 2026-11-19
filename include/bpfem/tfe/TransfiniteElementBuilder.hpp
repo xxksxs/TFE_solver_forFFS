@@ -7,24 +7,9 @@
 
 namespace fem::tfe {
 
-// Configuration for the true Transfinite Element (TFE) port-region treatment.
-//
-// TFE keeps the same per-mode FE-projection machinery the rest of the
-// pipeline expects, but admits *multiple* transverse modes per port. Each
-// retained mode contributes one rank-1 port operator
-//   +j * beta_p^{(k)} * m_p^{(k)} (m_p^{(k)})^T
-// to the global system after Schur-eliminating the per-mode coefficients
-// alpha (which are diagonal because port modes are L2-orthogonal on the
-// cross section).
-//
-// The mode shapes are computed *numerically* by solving the 2D H(curl)
-// generalized eigenproblem on the port surface mesh:
-//   K_port v = k_c^2 M_port v.
-// This is what HFSS and other commercial codes call the "port mode solver",
-// and is what makes TFE physically distinct from the analytic-port-mode
-// (APM) path: rather than projecting a closed-form rectangular waveguide
-// shape, TFE picks up whatever transverse modes the actual port mesh
-// supports (rectangular, ridged, circular, off-axis, etc.).
+// Compatibility adapter for the former numerical-multimode port API.
+// The active full-edge port path uses PortModeSolver and WavePortBC.
+// The modal trace replacement is implemented by TfeSystem.
 struct TfeOptions {
     // Maximum number of physical (non-spurious) modes retained per port,
     // sorted ascending by k_c^2. The dominant mode is at index 0 and is
@@ -44,9 +29,7 @@ public:
     // keeping the lowest options_.modesPerPort non-spurious eigenmodes.
     MultiPortMode build(int faceId) const;
 
-    // Optional rectangular-cross-section detection. Used only for human-
-    // readable logging in Application; TFE itself does not require the port
-    // to be rectangular.
+    // Optional rectangular-cross-section detection for geometry reporting.
     apm::RectPortGeometry detectRectangular(int faceId) const;
 
 private:

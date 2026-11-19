@@ -24,7 +24,7 @@ MultiPortMode TransfiniteElementBuilder::build(int faceId) const {
     const int requested = std::max(1, options_.modesPerPort);
     MultiPortMode multi = portModeSolver_.computeMultiMode(faceId, requested);
     if (multi.modes.empty()) {
-        throw std::runtime_error("TransfiniteElementBuilder: numerical port eigensolve produced no modes for face "
+        throw std::runtime_error("Numerical multimode port eigensolve produced no modes for face "
                                  + std::to_string(faceId));
     }
     multi.faceId = faceId;
