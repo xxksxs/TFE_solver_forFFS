@@ -13,6 +13,15 @@
 
 ---
 
+## [2026.11.19-tfe-solver] - 2026-11-19
+
+- 明确区分端口离散、扫频策略、全局线性后端和局部预条件。采用 `numerical-multimode` 和 `pardiso` 命名，兼容既有参数。运行报告新增实际执行的端口表示、线性后端类别、预条件和 SpMV 路径。[模块职责与回归记录](../changes/2026-11-19-module-boundaries.md)
+- 验证 MUMPS 多波前直接后端与 WCAWE 的分解复用，覆盖内存内、外存和块低秩配置。[多波前验证](../changes/2026-11-19-multifrontal-wcawe-validation.md)
+- WCAWE 离线矩复用因子做真实残差校正。递推残差超限时以失败状态结束，避免输出不合格的降阶结果。[残差校正](../changes/2026-11-19-wcawe-blr-residual-refinement.md)
+- 四种 MKL/MUMPS 构建组合共通过 16 项 CTest。12 个 CLI 对照达到预期，覆盖旧命令、后端与预条件组合、分块 TFE 和 16 阶 BLR WCAWE。
+
+---
+
 ## [2026.11.18-tfe-solver] - 2026-11-18
 
 - 原生 TFE 端口迹替换、模态 S 参数和分段二阶 MGAWE，支持指定深谷区间内的精确求解。
