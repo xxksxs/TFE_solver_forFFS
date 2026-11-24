@@ -2,6 +2,7 @@
 
 #include "bpfem/core/Types.hpp"
 #include "bpfem/linalg/IPreconditioner.hpp"
+#include "bpfem/linalg/IterativeOperator.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
 
 #include <complex>
@@ -23,6 +24,9 @@ namespace fem {
 class GmresSolver {
 public:
     void setPreconditioner(std::shared_ptr<linalg::IPreconditioner> precon);
+    void beginMatrix(const SparseMatrix& matrix);
+    void endMatrix() noexcept;
+    void setMklSpmv(bool enabled) { useMklSpmv_ = enabled; }
 
     // Restart length (Krylov subspace dimension before restart). Defaults to
     // 30, which matches typical PETSc / hypre / SLEPc presets and is a good
@@ -37,6 +41,9 @@ public:
 private:
     int restartLength_ = 30;
     std::shared_ptr<linalg::IPreconditioner> precon_;
+    const SparseMatrix* preparedMatrix_ = nullptr;
+    bool useMklSpmv_ = false;
+    std::unique_ptr<linalg::IterativeOperator> preparedOperator_;
 };
 
 }  // namespace fem

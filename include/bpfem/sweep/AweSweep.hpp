@@ -16,6 +16,7 @@ struct AweOptions {
     // Denominator order q for the [q-1/q] scalar Padé fit. The moment
     // recurrence therefore generates 2*q moments.
     int order = 8;
+    bool fieldPade = false;
 
     // Expansion frequency in Hz. 0 means "use band center".
     double expansionFrequencyHz = 0.0;
@@ -57,8 +58,7 @@ private:
 
     bool ready_ = false;
     double expansionFrequencyHz_ = 0.0;
-    double lambda0_ = 0.0;
-    double lambdaScale_ = 1.0;
+    std::vector<fastsweep::PadeApproximant> fieldPade_;
 
     FEMAssembler::AffineSystem affine_;
     fastsweep::PadeApproximant inputProjectionPade_;

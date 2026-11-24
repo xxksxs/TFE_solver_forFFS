@@ -6,6 +6,8 @@
 
 旧 `bpfem::tfe::TransfinitePortBuilder`（实际是 APM）已重命名为 `bpfem::apm::AnalyticPortBuilder`。CLI `--port-method numerical` 已从用户接口移除（代码中 `PortModeSolver` 仍保留作为内部工具，但通过 CLI 不可达）。新模块 `bpfem::tfe::TransfiniteElementBuilder` 实现真正 TFE：**端口面网格抽取后做 H(curl) 多模数值本征解** + 多端口波端口算子并入。
 
+> 历史实施记录。当前 CLI 仍支持 `numerical`、`analytic`、`tfe`，现行行为见[工程参考](../../engineering-reference.md)。旧误差、HFSS 来源和验收阈值待按原始配置复核。比较命令中的三个同名 CSV 路径是历史示意，复跑须使用独立 `--out`。
+
 ## 0.1 端口模建立改为数值本征求解（2026-05 修订）
 
 早期的 TFE 实现（提交 §2 之前）虽然能并入多模，但模形状仍来自矩形波导的 *解析* 表达式 `e_t^{TE/TM,mn}(u, v)`，再做一次 L2 投影到端口面 FE 自由度上。这是"解析模 + 多模并入"的混合方案，不是教科书意义上的 TFE。
@@ -115,23 +117,42 @@ CMakeLists.txt                                             # 加 src/apm + src/t
 
 ## 7. 与 HFSS TFE 参考的对比
 
-`wg_bp_filter_S_parameters.csv` 是 HFSS 用 TFE 端口在该 BP 滤波器上扫频得到的参考曲线（`mag(S(1,1))` / `mag(S(2,1))`，101 个频点 40–43 GHz）。比较脚本 `scripts/compare_with_hfss.py` 接受任意多个 solver run 标签并叠加绘图：
+`benchmark/wg_bp_filter/results/hfss_s_parameters.csv` 保存了 HFSS TFE 端口的 `mag(S(1,1))` 和 `mag(S(2,1))`，覆盖 40–43 GHz 的 101 个频点。在仓库根目录使用 oneMKL Release 构建运行以下 PowerShell 示例。三次 Direct 扫频使用相同工程、网格、频点和基函数阶次。APM 使用解析 TE10，TFE-1 和 TFE-5 分别为每个端口保留 1 和 5 个数值模。比较时用 `--allow-physical-variation` 允许这组有意设置的端口差异，频点直接对齐。
 
 ```powershell
-python scripts\compare_with_hfss.py `
-    "wg_bp_filter_S_parameters.csv" `
-    result/result_COMPARE `
-    --solver "APM=result\result_DIRECT\s_parameters.csv" `
-    --solver "TFE-1=result\result_DIRECT\s_parameters.csv" `
-    --solver "TFE-5=result\result_DIRECT\s_parameters.csv"
+$solver = '.\build\local-regression\mkl-Release\bp_fem_solver.exe'
+$case = '../../benchmark/wg_bp_filter'
+$out = 'result/port-comparison-' + [Guid]::NewGuid().ToString('N')
+$common = @(
+    '--aedt', "$case/project/wg_bp_filter.aedt",
+    '--mesh', "$case/project/current.ngmesh",
+    '--sweep', 'direct', '--linear-solver', 'direct',
+    '--basis-order', '0', '--max-sweep-points', '101', '--no-write-all-fields'
+)
+& $solver @common --port-method analytic --out "$out/apm"
+if ($LASTEXITCODE -ne 0) { throw 'APM run failed' }
+& $solver @common --port-method tfe --tfe-modes-per-port 1 --out "$out/tfe-1"
+if ($LASTEXITCODE -ne 0) { throw 'TFE-1 run failed' }
+& $solver @common --port-method tfe --tfe-modes-per-port 5 --out "$out/tfe-5"
+if ($LASTEXITCODE -ne 0) { throw 'TFE-5 run failed' }
+
+$csv = 'result_DIRECT/s_parameters.csv'
+$compareArgs = @(
+    "$case/results/hfss_s_parameters.csv", "$out/compare",
+    '--allow-physical-variation',
+    '--solver', "APM=$out/apm/$csv",
+    '--solver', "TFE-1=$out/tfe-1/$csv",
+    '--solver', "TFE-5=$out/tfe-5/$csv"
+)
+python scripts\compare_with_hfss.py @compareArgs
+if ($LASTEXITCODE -ne 0) { throw 'HFSS comparison failed' }
 ```
 
-输出：
+求解器在每组的 `result_DIRECT` 下发布 `s_parameters.csv` 和 `run.json`。比较脚本在 `$out/compare` 发布以下文件，并通过 `Output directory` 打印最终路径。
 
-- `result/result_COMPARE/tfe_compare.png`     |S11|/|S21| dB 叠加
-- `result/result_COMPARE/tfe_compare_residual.png`  线性 |S| 残差 (对深陷 null 不敏感)
-- `result/result_COMPARE/tfe_compare.csv`     按频点的差值表
-- `result/result_COMPARE/tfe_compare.txt`     各曲线的 max/mean/RMS|Δ| 与 3-dB 带宽 vs HFSS
+- `tfe_compare.png` 和 `tfe_compare_residual.png` 分别绘制 S11/S21 的 dB 曲线和线性幅度残差。
+- `tfe_compare.csv` 记录逐频对比，`tfe_compare.txt` 和 `benchmark_summary.csv` 汇总相对 HFSS 的误差及 3 dB 带宽。
+- `comparison_inputs.json` 记录各曲线使用的 CSV 路径、端口设置和频点对齐方式。
 
 ## 8. 待办
 

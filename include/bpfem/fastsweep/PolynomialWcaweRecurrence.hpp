@@ -38,6 +38,7 @@ enum class WcaweTerminationReason {
     HappyBreakdown,
     NearSingularUpperTriangularFactor,
     SolverFailure,
+    ToleranceExceeded,
     NonFiniteValue
 };
 

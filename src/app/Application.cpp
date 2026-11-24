@@ -15,6 +15,7 @@
 #include "bpfem/io/PortFaceResolver.hpp"
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/ISparseSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 #include "bpfem/post/OutputWriter.hpp"
 #include "bpfem/post/ResultExtractor.hpp"
 #include "bpfem/sweep/ISweepStrategy.hpp"
@@ -31,6 +32,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -76,14 +78,68 @@ std::filesystem::path runOutputDirectory(const Options& options) {
     return options.outDir / ("result_" + sweepOutputName(options.sweepStrategy));
 }
 
-void prepareCleanOutputDirectory(const std::filesystem::path& path) {
-    if (path.empty()) {
-        throw std::runtime_error("Output directory must not be empty");
+std::filesystem::path createRunStagingDirectory(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root);
+    std::random_device random;
+    for (;;) {
+        std::ostringstream id;
+        id << std::hex << std::chrono::system_clock::now().time_since_epoch().count()
+           << '-' << random() << '-' << random();
+        const auto staging = root / (".bpfem-pending-" + id.str());
+        if (std::filesystem::create_directory(staging)) {
+            return staging;
+        }
     }
-    if (std::filesystem::exists(path)) {
-        std::filesystem::remove_all(path);
+}
+
+void requireOutput(const std::filesystem::path& path) {
+    if (!std::filesystem::is_regular_file(path) || std::filesystem::file_size(path) == 0) {
+        throw std::runtime_error("Missing or empty run output: " + path.string());
     }
-    std::filesystem::create_directories(path);
+}
+
+void publishRun(std::filesystem::path& active, const std::filesystem::path& preferred,
+                RunReport& report) {
+    const auto suffix = active.filename().string().substr(std::string(".bpfem-pending-").size());
+    const auto alternate = preferred.parent_path() / (preferred.filename().string() + "-" + suffix);
+    // A completed directory contains files, so rename cannot replace it.
+    for (const auto& target : {preferred, alternate}) {
+        if (std::filesystem::exists(std::filesystem::symlink_status(target))) {
+            continue;
+        }
+        report.outputDirectory = target.u8string();
+        if (!writeRunReport(active / "run.json.pending", report)) {
+            throw std::runtime_error("Failed to write run.json");
+        }
+        std::error_code error;
+        std::filesystem::rename(active, target, error);
+        if (!error) {
+            active = target;
+            std::filesystem::rename(active / "run.json.pending", active / "run.json");
+            return;
+        }
+        if (!std::filesystem::exists(std::filesystem::symlink_status(target))) {
+            throw std::filesystem::filesystem_error("Cannot publish run directory", active, target, error);
+        }
+    }
+    throw std::runtime_error("Cannot claim a fresh run directory under " + preferred.parent_path().string());
+}
+
+void configurePardisoOutOfCore(const std::filesystem::path& outputDirectory) {
+    const auto scratch = std::filesystem::absolute(outputDirectory / "pardiso-ooc");
+    std::filesystem::create_directories(scratch);
+    const auto prefix = (scratch / "factors").string();
+#ifdef _WIN32
+    std::size_t existingLength = 0;
+    const int query = getenv_s(&existingLength, nullptr, 0, "MKL_PARDISO_OOC_FILE_NAME");
+    const int status = query != 0 ? query : existingLength != 0 ? 0
+        : _putenv_s("MKL_PARDISO_OOC_FILE_NAME", prefix.c_str());
+#else
+    const int status = setenv("MKL_PARDISO_OOC_FILE_NAME", prefix.c_str(), 0);
+#endif
+    if (status != 0) {
+        throw std::runtime_error("Could not configure PARDISO out-of-core files");
+    }
 }
 
 }  // namespace
@@ -174,6 +230,8 @@ Options parseOptions(int argc, char** argv) {
             if (options.alpsExpansionFrequencyHz <= 0.0) {
                 throw std::runtime_error("--alps-expansion must be > 0 Hz");
             }
+        } else if (arg == "--awe-field-pade") {
+            options.aweFieldPade = true;
         } else if (arg == "--awe-order") {
             options.aweOrder = std::stoi(requireValue(arg));
             if (options.aweOrder < 1) {
@@ -199,6 +257,28 @@ Options parseOptions(int argc, char** argv) {
             if (options.gaweDropTolerance <= 0.0) {
                 throw std::runtime_error("--gawe-drop-tolerance must be > 0");
             }
+        } else if (arg == "--mgawe-expansion") {
+            const double hz = std::stod(requireValue(arg));
+            const int order = std::stoi(requireValue(arg));
+            if (!std::isfinite(hz) || hz <= 0.0 || order < 1) {
+                throw std::runtime_error("--mgawe-expansion requires a positive frequency in Hz and order");
+            }
+            options.mgaweExpansions.emplace_back(hz, order);
+        } else if (arg == "--mgawe-2001") {
+            options.mgawe2001 = true;
+        } else if (arg == "--mgawe-adaptive") {
+            options.mgaweAdaptive = true;
+        } else if (arg == "--mgawe-adaptive-true-residual") {
+            options.mgaweAdaptiveTrueResidual = true;
+        } else if (arg == "--mgawe-true-residual-tolerance") {
+            const auto value = requireValue(arg);
+            std::size_t consumed = 0;
+            options.mgaweTrueResidualTolerance = std::stod(value, &consumed);
+            if (consumed != value.size() || !std::isfinite(options.mgaweTrueResidualTolerance)
+                || options.mgaweTrueResidualTolerance <= 0.0) {
+                throw std::runtime_error("--mgawe-true-residual-tolerance must be a finite positive number");
+            }
+            options.mgaweTrueResidualToleranceSpecified = true;
         } else if (arg == "--mgawe-points") {
             options.mgawePointCount = std::stoi(requireValue(arg));
             if (options.mgawePointCount < 1) {
@@ -214,6 +294,10 @@ Options parseOptions(int argc, char** argv) {
             if (options.mgaweDropTolerance <= 0.0) {
                 throw std::runtime_error("--mgawe-drop-tolerance must be > 0");
             }
+        } else if (arg == "--wcawe-check-moments") {
+            options.wcaweCheckMoments = true;
+        } else if (arg == "--wcawe-residual-diagnostics") {
+            options.wcaweResidualDiagnostics = true;
         } else if (arg == "--wcawe-order") {
             options.wcaweOrder = std::stoi(requireValue(arg));
             if (options.wcaweOrder < 1) {
@@ -255,8 +339,43 @@ Options parseOptions(int argc, char** argv) {
                 options.linearSolver = LinearSolverKind::BiCGStab;
             } else if (m == "gmres") {
                 options.linearSolver = LinearSolverKind::Gmres;
+            } else if (m == "mumps") {
+                options.linearSolver = LinearSolverKind::Mumps;
             } else {
-                throw std::runtime_error("--linear-solver must be 'auto', 'direct', 'bicgstab', or 'gmres'");
+                throw std::runtime_error("--linear-solver must be auto, direct, bicgstab, gmres or mumps");
+            }
+        } else if (arg == "--pardiso-mode") {
+            const auto mode = requireValue(arg);
+            if (mode != "incore" && mode != "ooc") {
+                throw std::runtime_error("--pardiso-mode must be 'incore' or 'ooc'");
+            }
+            options.pardisoOutOfCore = mode == "ooc";
+        } else if (arg == "--mumps-mode") {
+            options.mumpsMode = requireValue(arg);
+            if (options.mumpsMode != "incore" && options.mumpsMode != "ooc"
+                && options.mumpsMode != "blr") {
+                throw std::runtime_error("--mumps-mode must be incore, ooc or blr");
+            }
+        } else if (arg == "--mumps-blr-tolerance") {
+            options.mumpsBlrTolerance = std::stod(requireValue(arg));
+            if (!(options.mumpsBlrTolerance > 0.0 && options.mumpsBlrTolerance < 1.0)) {
+                throw std::runtime_error("--mumps-blr-tolerance must be between 0 and 1");
+            }
+        } else if (arg == "--schwarz-local-solver") {
+            const auto value = requireValue(arg);
+            if (value != "pardiso" && value != "mumps") {
+                throw std::runtime_error("--schwarz-local-solver must be pardiso or mumps");
+            }
+            options.schwarzLocalMumps = value == "mumps";
+        } else if (arg == "--schwarz-subdomains") {
+            options.schwarzSubdomains = std::stoi(requireValue(arg));
+            if (options.schwarzSubdomains < 1) {
+                throw std::runtime_error("--schwarz-subdomains must be >= 1");
+            }
+        } else if (arg == "--schwarz-overlap") {
+            options.schwarzOverlap = std::stoi(requireValue(arg));
+            if (options.schwarzOverlap < 0) {
+                throw std::runtime_error("--schwarz-overlap must be >= 0");
             }
         } else if (arg == "--precon") {
             const std::string m = requireValue(arg);
@@ -266,9 +385,17 @@ Options parseOptions(int argc, char** argv) {
                 options.preconditioner = PreconditionerKind::Jacobi;
             } else if (m == "ilu0") {
                 options.preconditioner = PreconditionerKind::Ilu0;
+            } else if (m == "schwarz") {
+                options.preconditioner = PreconditionerKind::Schwarz;
             } else {
-                throw std::runtime_error("--precon must be 'none', 'jacobi', or 'ilu0'");
+                throw std::runtime_error("--precon must be none, jacobi, ilu0 or schwarz");
             }
+        } else if (arg == "--iterative-spmv") {
+            const auto value = requireValue(arg);
+            if (value != "native" && value != "mkl") {
+                throw std::runtime_error("--iterative-spmv must be native or mkl");
+            }
+            options.iterativeMklSpmv = value == "mkl";
         } else if (arg == "--gmres-restart") {
             options.gmresRestart = std::stoi(requireValue(arg));
             if (options.gmresRestart < 1) {
@@ -281,17 +408,35 @@ Options parseOptions(int argc, char** argv) {
                       << "                     [--write-all-fields|--no-write-all-fields]\n"
                       << "                     [--sweep direct|alps|awe|gawe|mgawe|wcawe]\n"
                       << "                     [--alps-order 12] [--alps-krylov-order <deprecated-alias>] [--alps-expansion <Hz>]\n"
-                      << "                     [--awe-order 8] [--awe-expansion <Hz>]\n"
+                      << "                     [--awe-order 8] [--awe-expansion <Hz>] [--awe-field-pade]\n"
                       << "                     [--gawe-order 12] [--gawe-expansion <Hz>] [--gawe-drop-tolerance 1e-10]\n"
-                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10]\n"
-                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12]\n"
+                      << "                     [--mgawe-points 3] [--mgawe-order 8] [--mgawe-drop-tolerance 1e-10] [--mgawe-adaptive|--mgawe-2001]\n"
+                      << "                     [--mgawe-adaptive-true-residual] [--mgawe-true-residual-tolerance 1e-3]\n"
+                      << "                     [--mgawe-expansion <Hz> <order>] (repeatable)\n"
+                      << "                     [--wcawe-order 12] [--wcawe-expansion <Hz>] [--wcawe-drop-tolerance 1e-12] [--wcawe-check-moments] [--wcawe-residual-diagnostics]\n"
                       << "                     [--port-method numerical|analytic|tfe] [--tfe-modes-per-port N]\n"
-                      << "                     [--linear-solver auto|direct|bicgstab|gmres] [--precon none|jacobi|ilu0]\n"
-                      << "                     [--gmres-restart 30]\n";
+                      << "                     [--linear-solver auto|direct|bicgstab|gmres|mumps]\n"
+                      << "                     [--precon none|jacobi|ilu0|schwarz] [--gmres-restart 30]\n"
+                      << "                     [--iterative-spmv native|mkl]\n"
+                      << "                     [--pardiso-mode incore|ooc] [--mumps-mode incore|ooc|blr]\n"
+                      << "                     [--mumps-blr-tolerance 1e-10] [--schwarz-subdomains 8]\n"
+                      << "                     [--schwarz-overlap 1] [--schwarz-local-solver pardiso|mumps]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("Unknown option: " + arg);
         }
+    }
+    if (options.mgaweAdaptiveTrueResidual && options.sweepStrategy != SweepStrategy::Mgawe) {
+        throw std::runtime_error("--mgawe-adaptive-true-residual requires --sweep mgawe");
+    }
+    if (options.wcaweResidualDiagnostics && options.sweepStrategy != SweepStrategy::Wcawe) {
+        throw std::runtime_error("--wcawe-residual-diagnostics requires --sweep wcawe");
+    }
+    if (options.mgaweAdaptiveTrueResidual && (options.mgaweAdaptive || options.mgawe2001)) {
+        throw std::runtime_error("--mgawe-adaptive-true-residual cannot be combined with --mgawe-adaptive or --mgawe-2001");
+    }
+    if (options.mgaweTrueResidualToleranceSpecified && !options.mgaweAdaptiveTrueResidual) {
+        throw std::runtime_error("--mgawe-true-residual-tolerance requires --mgawe-adaptive-true-residual");
     }
     return options;
 }
@@ -319,27 +464,33 @@ int runApplication(int argc, char** argv) {
     // returning non-zero.
     Logger log(std::cout);
     RunReport report;
-    std::filesystem::path crashLogPath;
-    std::filesystem::path runJsonPath;
-    std::filesystem::path timingJsonPath;
+    std::vector<FrequencyStat> sweepStats;
+    std::filesystem::path activeDirectory;
     const auto runStart = std::chrono::steady_clock::now();
 
     try {
         log.banner();
 
         Options options = parseOptions(argc, argv);
-        const std::filesystem::path outputRoot = options.outDir;
-        options.outDir = runOutputDirectory(options);
-        prepareCleanOutputDirectory(options.outDir);
+        if (options.outDir.empty()) {
+            throw std::runtime_error("Output directory must not be empty");
+        }
+        options.outDir = std::filesystem::absolute(options.outDir).lexically_normal();
+        const auto preferredDirectory = runOutputDirectory(options);
+        const auto outputRoot = options.outDir;
+        activeDirectory = createRunStagingDirectory(outputRoot);
+        options.outDir = activeDirectory;
 
         // Attach the tee log file before any further info() so every line is
         // captured in run.log.
-        log.attachLogFile((options.outDir / "run.log").string());
-        crashLogPath = options.outDir / "run.crash.log";
-        runJsonPath = options.outDir / "run.json";
-        timingJsonPath = options.outDir / "timing.json";
+        if (!log.attachLogFile(activeDirectory / "run.log")) {
+            throw std::runtime_error("Cannot open run.log in " + activeDirectory.string());
+        }
         log.info("Output root: " + outputRoot.string());
-        log.info("Output directory: " + options.outDir.string());
+        log.info("Staging directory: " + activeDirectory.string());
+        if (options.pardisoOutOfCore) {
+            configurePardisoOutOfCore(activeDirectory);
+        }
 
         // -------------------- Env header --------------------
         // Captured once and emitted as [env] tagged lines so the log is
@@ -348,6 +499,7 @@ int runApplication(int argc, char** argv) {
         const RunEnvironment env = captureRunEnvironment(argc, argv);
         writeEnvHeader(log, env);
         fillReportFromEnvironment(report, env, options);
+        captureRunInputs(report, options, argv[0]);
 
         // -------------------- Project import --------------------
         log.phase("Project import");
@@ -359,6 +511,7 @@ int runApplication(int argc, char** argv) {
 
         log.info("Reading NGMesh: " + options.mesh.string());
         const Mesh mesh = NGMeshParser{}.parse(options.mesh);
+        verifyRunInputs(report, options);
         log.info("Mesh points: " + std::to_string(mesh.pointsById.size()));
         log.info("Surface triangles: " + std::to_string(mesh.surfaceTriangles.size()));
         log.info("Tetrahedra: " + std::to_string(mesh.tetrahedra.size()));
@@ -479,6 +632,7 @@ int runApplication(int argc, char** argv) {
             switch (options.preconditioner) {
                 case PreconditionerKind::Jacobi: preconName = "Jacobi"; break;
                 case PreconditionerKind::Ilu0:   preconName = "ILU(0)"; break;
+                case PreconditionerKind::Schwarz: preconName = "Schwarz"; break;
                 case PreconditionerKind::None:   break;
             }
             log.info("Preconditioner: " + preconName);
@@ -496,7 +650,6 @@ int runApplication(int argc, char** argv) {
         // bulk S-parameter table, and (b) push a FrequencyStat into the JSON
         // sweep array. Field S parameters are filled in below after the
         // sweep returns, when sparams is in scope.
-        std::vector<FrequencyStat> sweepStats;
         sweepStats.reserve(frequencies.size());
 
         sweep::SweepContext sweepCtx{
@@ -512,13 +665,15 @@ int runApplication(int argc, char** argv) {
             };
         }
         sweepCtx.onFrequencyStat = [&](double f, double assembleSec, double solveSec,
-                                        int iterations, double residual) {
+                                        const SolveResult& result) {
             FrequencyStat fs;
             fs.frequencyHz = f;
             fs.assembleSec = assembleSec;
             fs.solveSec = solveSec;
-            fs.iterations = iterations;
-            fs.residual = residual;
+            fs.iterations = result.iterations;
+            fs.residual = result.residual;
+            fs.absoluteResidual = result.absoluteResidual;
+            fs.linearSolveStatus = linalg::solveStatusName(result.status);
             sweepStats.push_back(fs);
         };
 
@@ -538,13 +693,14 @@ int runApplication(int argc, char** argv) {
             report.factorizedRhsSolveCount = stats.factorizedRhsSolveCount;
             report.factorizedSolveCallCount = stats.factorizedSolveCallCount;
             report.batchRhsMax = stats.batchRhsMax;
+            report.estimatedSolverPeakKiB = stats.estimatedSolverPeakKiB;
             report.symbolicAnalysisSec = stats.symbolicAnalysisSec;
             report.numericFactorizationSec = stats.numericFactorizationSec;
             report.factorizedRhsSolveSec = stats.factorizedRhsSolveSec;
 
             std::ostringstream solverSummary;
             solverSummary << std::fixed << std::setprecision(6)
-                          << "PARDISO reuse: symbolic=" << stats.symbolicAnalysisCount
+                          << sparseSolver->name() << " reuse: symbolic=" << stats.symbolicAnalysisCount
                           << " (" << stats.symbolicAnalysisSec << " s), numeric="
                           << stats.numericFactorizationCount << " ("
                           << stats.numericFactorizationSec << " s), RHS="
@@ -558,14 +714,24 @@ int runApplication(int argc, char** argv) {
         const std::vector<SParameterPoint>& sparams = swept.points;
         const std::vector<std::complex<double>>& lastEdgeDofs = swept.lastEdgeDofs;
         const double lastFrequency = swept.lastFrequencyHz;
+        if (sparams.size() != frequencies.size() || sparams.empty()) {
+            throw std::runtime_error("Sweep did not return all requested frequency points");
+        }
+        for (std::size_t i = 0; i < frequencies.size(); ++i) {
+            if (sparams[i].frequencyHz != frequencies[i]) {
+                throw std::runtime_error("Sweep returned a frequency that differs from the requested grid");
+            }
+        }
+        requireOutput(activeDirectory / "diagnostics.json");
+        if (options.sweepStrategy == SweepStrategy::Wcawe) {
+            requireOutput(activeDirectory / "basis_condition.csv");
+        }
 
         // -------------------- S parameter recap table --------------------
         // Single-glance table for users skimming the log. Tagged "[s-params]"
-        // so it is grep-able in scripts. Power-balance column |S11|^2+|S21|^2
-        // equals 1 for lossless networks at all frequencies; values far from
-        // 1.0 flag mode mismatch / numerical issues.
+        // so it is grep-able in scripts. The reported power covers only the displayed modes.
         log.info("S parameters (" + std::to_string(sparams.size())
-                 + " rows; |S11|^2+|S21|^2 should equal 1.0 for a lossless network):");
+                 + " rows; power sum covers the displayed modes):");
         log.stat("f(GHz)    |S11|dB     |S21|dB     |S11|^2+|S21|^2");
         for (std::size_t i = 0; i < sparams.size(); ++i) {
             const auto& p = sparams[i];
@@ -624,17 +790,17 @@ int runApplication(int argc, char** argv) {
         }
         report.totalElapsedSec = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - runStart).count();
-        if (!writeTimingReport(timingJsonPath, report)) {
-            log.warn("Failed to write timing report to " + timingJsonPath.string());
-        } else {
-            log.info("Wrote " + timingJsonPath.string());
+        sweepStrategy.reset();
+        sparseSolver.reset();
+        if (!log.closeLogFile()) {
+            throw std::runtime_error("Failed to close run.log");
         }
-        if (!writeRunReport(runJsonPath, report)) {
-            log.warn("Failed to write JSON sidecar to " + runJsonPath.string());
-        } else {
-            log.info("Wrote " + runJsonPath.string());
+        report.status = "ok";
+        if (!writeTimingReport(activeDirectory / "timing.json", report)) {
+            throw std::runtime_error("Failed to write timing.json");
         }
-
+        publishRun(activeDirectory, preferredDirectory, report);
+        std::cout << "Output directory: " << report.outputDirectory << '\n';
         return 0;
     } catch (const std::exception& ex) {
         // Fatal path: emit a [fatal] line to console + tee log, then dump
@@ -643,13 +809,18 @@ int runApplication(int argc, char** argv) {
         // and write whatever sweep stats we managed to collect.
         log.error(std::string("[fatal] ") + ex.what());
         std::cerr << "[fatal] " << ex.what() << '\n';
-        if (!crashLogPath.empty()) {
+        if (!activeDirectory.empty()) {
+            std::cerr << "Failed run directory: " << activeDirectory.string() << '\n';
+            const auto crashLogPath = activeDirectory / "run.crash.log";
             if (log.writeCrashDump(crashLogPath.string(), ex.what())) {
                 log.info("Crash details written to " + crashLogPath.string());
             }
-        }
-        if (!runJsonPath.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(activeDirectory / "run.json.pending", ignored);
+            std::filesystem::remove(activeDirectory / "timing.json", ignored);
             report.status = "fatal";
+            report.outputDirectory = activeDirectory.u8string();
+            report.sweep = sweepStats;
             report.phases = collectPhaseSummaries(log);
             const auto memFinal = queryProcessMemory();
             if (memFinal.peakBytes > 0) {
@@ -657,10 +828,8 @@ int runApplication(int argc, char** argv) {
             }
             report.totalElapsedSec = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - runStart).count();
-            if (!timingJsonPath.empty()) {
-                writeTimingReport(timingJsonPath, report);
-            }
-            writeRunReport(runJsonPath, report);
+            writeTimingReport(activeDirectory / "timing.json", report);
+            writeRunReport(activeDirectory / "run.json", report);
         }
         return 1;
     }

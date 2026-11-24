@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
+#include <locale>
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
@@ -218,13 +220,20 @@ void OutputWriter::writeSParameters(const std::filesystem::path& path, const std
     auto db = [](const std::complex<double>& value) {
         return 20.0 * std::log10(std::max(std::abs(value), 1.0e-300));
     };
+    out.imbue(std::locale::classic());
     out << "freq_Hz,S11_real,S11_imag,S11_dB,S21_real,S21_imag,S21_dB\n";
-    out << std::setprecision(15);
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
     for (const auto& row : data) {
+        if (!std::isfinite(row.frequencyHz) || !std::isfinite(std::abs(row.s11))
+            || !std::isfinite(std::abs(row.s21))) {
+            throw std::runtime_error("Non-finite frequency or S parameter: " + path.string());
+        }
         out << row.frequencyHz << ','
             << row.s11.real() << ',' << row.s11.imag() << ',' << db(row.s11) << ','
             << row.s21.real() << ',' << row.s21.imag() << ',' << db(row.s21) << '\n';
     }
+    out.close();
+    if (!out) throw std::runtime_error("Incomplete S-parameter write: " + path.string());
 }
 
 void OutputWriter::writeVTU(const std::filesystem::path& path,
@@ -531,6 +540,8 @@ void OutputWriter::writeVTU(const std::filesystem::path& path,
     out << "    </Piece>\n";
     out << "  </UnstructuredGrid>\n";
     out << "</VTKFile>\n";
+    out.close();
+    if (!out) throw std::runtime_error("Incomplete VTU write: " + path.string());
 }
 
 std::vector<OutputWriter::ComplexVec3> OutputWriter::reconstructLagrangePointField(

@@ -6,7 +6,7 @@
 
 - `docs/validation/` 已经规划了最小验证、残差预期、端口验证、S 参数验证、场可视化、单位检查、失败特征、验证流程。
 - `docs/testing/` 包含构建检查、CLI smoke test、输出检查、回归清单与"建议补充的单元测试"。
-- 工程内只有一个示例 `wg_bp_filter`；没有自动化 CI、没有规范化基准库、没有收敛性回归。
+- 当前工程包含 `wg_bp_filter` 和 `IOStructure`。已有 CTest 注册和部分数值回归，见[测试入口](../testing/README.md)。下述 CI、基准库和覆盖率指标为规划。
 
 ## 2. 单元测试层
 

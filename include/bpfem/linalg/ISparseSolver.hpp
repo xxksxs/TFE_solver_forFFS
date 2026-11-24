@@ -3,6 +3,7 @@
 #include "bpfem/core/Types.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
 
+#include <atomic>
 #include <complex>
 #include <vector>
 
@@ -25,6 +26,10 @@ struct SolverConfig {
 // caller does not need to know which backend the build supports.
 class ISparseSolver {
 public:
+    ISparseSolver() = default;
+    // Session ownership belongs to the instance and does not transfer with a backend copy.
+    ISparseSolver(const ISparseSolver&) noexcept {}
+    ISparseSolver& operator=(const ISparseSolver&) noexcept { return *this; }
     virtual ~ISparseSolver() = default;
 
     // Solve A x = b. Implementations may keep internal symbolic factorization
@@ -32,6 +37,10 @@ public:
     virtual SolveResult solve(const SparseMatrix& A,
                               const std::vector<std::complex<double>>& b,
                               const SolverConfig& cfg = {}) = 0;
+
+    // Scope optional numerical preparation to a single immutable matrix.
+    virtual void beginMatrix(const SparseMatrix&) {}
+    virtual void endMatrix() noexcept {}
 
     // When the caller knows the sparsity pattern stays constant across solves
     // (typical for frequency sweeps with a fixed mesh + DOF map), enabling
@@ -42,6 +51,10 @@ public:
 
     // Human-readable backend name for logging.
     virtual const char* name() const = 0;
+
+private:
+    friend class FactorizedSolveSession;
+    std::atomic_flag fixedMatrixSessionActive_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace fem::linalg

@@ -10,6 +10,19 @@ ResultExtractor::ResultExtractor(const ProjectDefinition& project, const PortMod
     : project_(project), portModeSolver_(portModeSolver) {}
 
 SParameterPoint ResultExtractor::extract(double frequencyHz, const std::vector<std::complex<double>>& edgeDofs) const {
+    if (project_.ports.size() < 2) {
+        SParameterPoint sp;
+        sp.frequencyHz = frequencyHz;
+        return sp;
+    }
+    return extractFromPortProjections(frequencyHz,
+        portProjection(edgeDofs, project_.ports[0].faceId),
+        portProjection(edgeDofs, project_.ports[1].faceId));
+}
+
+SParameterPoint ResultExtractor::extractFromPortProjections(double frequencyHz,
+                                                           std::complex<double> inputProjection,
+                                                           std::complex<double> outputProjection) const {
     SParameterPoint sp;
     sp.frequencyHz = frequencyHz;
     if (project_.ports.size() < 2) {
@@ -26,9 +39,9 @@ SParameterPoint ResultExtractor::extract(double frequencyHz, const std::vector<s
         sp.s21 = 0.0;
         return sp;
     }
-    const std::complex<double> bIn = portProjection(edgeDofs, project_.ports[0].faceId) / sIn;
+    const std::complex<double> bIn = inputProjection / sIn;
     const std::complex<double> bOut = (sOut > 0.0)
-        ? portProjection(edgeDofs, project_.ports[1].faceId) / sOut
+        ? outputProjection / sOut
         : std::complex<double>(0.0, 0.0);
     const std::complex<double> incident = project_.ports[0].excited
         ? std::polar(std::sqrt(std::max(project_.ports[0].magnitudeW, 0.0)), project_.ports[0].phaseDeg * pi / 180.0)

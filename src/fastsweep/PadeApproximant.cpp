@@ -56,7 +56,9 @@ PadeApproximant PadeApproximant::build(const std::vector<Complex>& moments,
             rhs[static_cast<std::size_t>(row)] = -moments[static_cast<std::size_t>(k)];
             for (int col = 0; col < denominatorOrder; ++col) {
                 const int j = col + 1;
-                system[idx(row, col, denominatorOrder)] = moments[static_cast<std::size_t>(k - j)];
+                if (j <= k) {
+                    system[idx(row, col, denominatorOrder)] = moments[static_cast<std::size_t>(k - j)];
+                }
             }
         }
 
@@ -79,6 +81,19 @@ PadeApproximant PadeApproximant::build(const std::vector<Complex>& moments,
                 * moments[static_cast<std::size_t>(i - j)];
         }
         out.numerator_[static_cast<std::size_t>(i)] = coeff;
+    }
+    for (int k = numeratorOrder + 1; k < required; ++k) {
+        Complex residual{};
+        double scale = 0.0;
+        for (int j = 0; j <= std::min(k, denominatorOrder); ++j) {
+            const auto term = out.denominator_[static_cast<std::size_t>(j)]
+                * moments[static_cast<std::size_t>(k - j)];
+            residual += term;
+            scale += std::abs(term);
+        }
+        const double error = scale > 0.0 ? std::abs(residual) / scale : 0.0;
+        if (!std::isfinite(error)) throw std::runtime_error("Padé coefficient match is non-finite");
+        out.coefficientMatchingError_ = std::max(out.coefficientMatchingError_, error);
     }
     return out;
 }
@@ -107,7 +122,11 @@ PadeApproximant PadeApproximant::buildBestEffort(const std::vector<Complex>& mom
 // 在给定局部变量 t 上评估 Padé 有理函数。
 PadeApproximant::Complex PadeApproximant::evaluate(Complex t) const {
     const Complex den = horner(denominator_, t);
-    if (std::abs(den) < 1.0e-30) {
+    double scale = 0.0;
+    for (auto it = denominator_.rbegin(); it != denominator_.rend(); ++it) {
+        scale = scale * std::abs(t) + std::abs(*it);
+    }
+    if (!std::isfinite(scale) || !std::isfinite(std::abs(den)) || std::abs(den) <= 1.0e-14 * scale) {
         throw std::runtime_error("PadeApproximant: denominator is near zero");
     }
     return horner(numerator_, t) / den;

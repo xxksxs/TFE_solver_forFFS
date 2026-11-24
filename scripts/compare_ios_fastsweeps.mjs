@@ -1,46 +1,55 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import {
+  compareAgainstDirect, compareModelSettings, publishComparison, readRunReport, validateReportedGrid,
+} from "./compare_direct_fastsweeps.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outputDir = path.join(root, "result", "result_COMPARE_IOStructure");
+const { values: options } = parseArgs({ options: {
+  "results-root": { type: "string", default: path.join(root, "result") },
+  "include-alps": { type: "boolean" },
+  "allow-legacy": { type: "boolean" },
+  run: { type: "string", multiple: true },
+  direct: { type: "boolean" },
+  help: { type: "boolean", short: "h" },
+} });
+const resultsRoot = path.resolve(options["results-root"]);
+const runDirectories = {};
+for (const value of options.run ?? []) {
+  const match = /^(DIRECT|ALPS|AWE|GAWE|MGAWE|WCAWE)=(.+)$/.exec(value);
+  if (!match || runDirectories[match[1]]) throw new Error(`Invalid or repeated --run: ${value}`);
+  runDirectories[match[1]] = path.resolve(match[2]);
+}
 const hfssPath = path.join(root, "IOStructure_S_parameters.csv");
-const includeAlps = process.argv.includes("--include-alps");
+const includeAlps = options["include-alps"];
 const runs = [
   ...(includeAlps ? [{
     name: "ALPS",
     color: "#009E73",
-    directory: path.join(root, "result", "result_ALPS"),
-    configuration: "single 95 GHz expansion, two-sided Lanczos-Pade, order 12",
-    candidateCount: 24,
+    directory: path.join(resultsRoot, "result_ALPS"),
   }] : []),
   {
     name: "AWE",
     color: "#CC79A7",
-    directory: path.join(root, "result", "result_AWE"),
-    configuration: "single expansion at 95 GHz, Pade [11/12], 24 moments",
-    candidateCount: 24,
+    directory: path.join(resultsRoot, "result_AWE"),
   },
   {
     name: "GAWE",
     color: "#E69F00",
-    directory: path.join(root, "result", "result_GAWE"),
-    configuration: "single expansion at 95 GHz, Galerkin order 12",
-    candidateCount: 12,
+    directory: path.join(resultsRoot, "result_GAWE"),
   },
   {
     name: "WCAWE",
     color: "#D55E00",
-    directory: path.join(root, "result", "result_WCAWE"),
-    configuration: "single expansion at 95 GHz, order 12",
-    candidateCount: 12,
+    directory: path.join(resultsRoot, "result_WCAWE"),
   },
   {
     name: "MGAWE",
     color: "#0072B2",
-    directory: path.join(root, "result", "result_MGAWE"),
-    configuration: "3 expansions at 90/95/100 GHz, local order 4",
-    candidateCount: 12,
+    directory: path.join(resultsRoot, "result_MGAWE"),
   },
 ];
 const outputStem = includeAlps
@@ -84,7 +93,7 @@ function parseCsv(text) {
     row.push(field);
     rows.push(row);
   }
-  const header = rows.shift().map((value) => value.trim().replace(/^"|"$/g, ""));
+  const header = rows.shift()?.map((value) => value.trim().replace(/^"|"$/g, "")) ?? [];
   return rows
     .filter((values) => values.some((value) => value.trim() !== ""))
     .map((values) => Object.fromEntries(header.map((key, index) => [key, (values[index] ?? "").trim()])));
@@ -179,14 +188,14 @@ function readDiagnostics(directory) {
   return JSON.parse(fs.readFileSync(path.join(directory, "diagnostics.json"), "utf8"));
 }
 
-// 读取 WCAWE 条件数曲线最后一行，衡量传统矩基与正交基的稳定性差异。
+// 读取 WCAWE 递推与正交性诊断的最后一行。
 function readFinalBasisCondition(directory) {
   const rows = readCsv(path.join(directory, "basis_condition.csv"));
   const row = rows.at(-1);
   return {
     order: Number(row.order),
-    aweConditionProxy: Number(row.awe_condition_proxy),
-    wcaweConditionProxy: Number(row.wcawe_condition_proxy),
+    uDiagonalRatio: row.u_diagonal_ratio ? Number(row.u_diagonal_ratio) : null,
+    orthogonalityError: row.orthogonality_error ? Number(row.orthogonality_error) : null,
   };
 }
 
@@ -202,6 +211,21 @@ function assertAligned(reference, candidate, name) {
   }
 }
 
+if (options.help) {
+  fs.writeSync(process.stdout.fd,
+    "Usage: node scripts/compare_ios_fastsweeps.mjs [--results-root <dir>] [--direct | --include-alps]\n" +
+    "--direct compares MGAWE and WCAWE with a matched Direct run.\n" +
+    "--run SWEEP=directory selects an explicit run (repeatable); default is result_<SWEEP>.\n" +
+    "--allow-legacy allows old reports without input hashes; only recorded paths are checked.\n");
+  process.exit(0);
+}
+if (options.direct) {
+  if (includeAlps) throw new Error("--direct and --include-alps cannot be combined");
+  const directory = compareAgainstDirect(resultsRoot, readCsv, writeCsv, runDirectories, options["allow-legacy"]);
+  fs.writeSync(process.stdout.fd, `Wrote Direct comparison to ${directory}\n`);
+  process.exit(0);
+}
+
 const hfss = readCsv(hfssPath).map((row) => ({
   freqGHz: Number(row["Freq [GHz]"]),
   s11: Number(row["mag(S(1,1)) []"]),
@@ -213,29 +237,32 @@ if (hfss.length !== 101 || hfss.some((row) => !Number.isFinite(row.freqGHz + row
 }
 
 for (const run of runs) {
-  run.rows = readCsv(path.join(run.directory, "s_parameters.csv")).map((row) => ({
+  run.directory = runDirectories[run.name] ?? run.directory;
+  run.report = readRunReport(run.directory, run.name, options["allow-legacy"]);
+  const samples = readCsv(path.join(run.directory, "s_parameters.csv"));
+  validateReportedGrid(run.report, samples.map((row) => Number(row.freq_Hz)), run.directory);
+  run.rows = samples.map((row) => ({
     freqGHz: Number(row.freq_Hz) / 1e9,
     s11: complexMagnitude(row.S11_real, row.S11_imag),
     s21: complexMagnitude(row.S21_real, row.S21_imag),
   }));
   assertAligned(hfss, run.rows, run.name);
+  if (run.rows.some(({freqGHz, s11, s21}) => !Number.isFinite(freqGHz + s11 + s21))) {
+    throw new Error(`${run.name}: non-finite frequency or S parameter`);
+  }
   run.timing = readTiming(run.directory);
   run.diagnostics = readDiagnostics(run.directory);
+  if (run.diagnostics.reduced_solve_succeeded === false) {
+    throw new Error(`${run.directory}: a reduced solve failed`);
+  }
 }
 
 const runByName = Object.fromEntries(runs.map((run) => [run.name, run]));
 runByName.WCAWE.basisCondition = readFinalBasisCondition(runByName.WCAWE.directory);
-fs.mkdirSync(outputDir, { recursive: true });
-for (const staleStem of [
-  "ios_wcawe_mgawe",
-  "ios_alps_wcawe_mgawe",
-  "ios_awe_gawe_wcawe_mgawe",
-  "ios_alps_awe_gawe_wcawe_mgawe",
-]) {
-  for (const suffix of ["comparison.csv", "summary.csv", "report.json", "comparison.svg"]) {
-    fs.rmSync(path.join(outputDir, staleStem + "_" + suffix), { force: true });
-  }
-}
+const referenceRun = runs.find((run) => run.report.inputs) ?? runs[0];
+const inputVerification = Object.fromEntries(runs.map((run) => [
+  run.name, compareModelSettings(referenceRun, run),
+]));
 
 const comparisonRows = hfss.map((reference, index) => {
   const row = {
@@ -290,9 +317,14 @@ const summaryRows = runs.map((run) => {
   );
   return {
     algorithm: run.name,
-    configuration: run.configuration,
+    configuration: JSON.stringify({
+      model: run.diagnostics.model,
+      expansionFrequenciesHz: run.diagnostics.expansion_frequencies_hz,
+      requestedOrder: run.diagnostics.requested_order,
+      localOrders: run.diagnostics.local_orders,
+    }),
+    backend: run.report.linear_solver_backend,
     points: run.rows.length,
-    candidate_vectors_or_moments: run.candidateCount,
     rom_dimension: run.diagnostics.rom_dimension,
     retained_columns: run.diagnostics.retained_columns,
     deflated_columns: run.diagnostics.deflated_columns,
@@ -359,32 +391,28 @@ const report = {
   frequencyRangeGHz: [hfss[0].freqGHz, hfss.at(-1).freqGHz],
   points: hfss.length,
   reference: "IOStructure_S_parameters.csv",
+  referenceSha256: createHash("sha256").update(fs.readFileSync(hfssPath)).digest("hex"),
+  inputVerification,
+  solverInputs: referenceRun.report.inputs ?? null,
+  solverDirectories: Object.fromEntries(runs.map((run) => [run.name, run.directory])),
   algorithms: summaryRows,
   pairwiseMagnitudeDifferences,
   wcaweConditioning: {
     order: runByName.WCAWE.basisCondition.order,
-    aweConditionProxy: runByName.WCAWE.basisCondition.aweConditionProxy,
-    wcaweConditionProxy: runByName.WCAWE.basisCondition.wcaweConditionProxy,
-    momentReconstructionError: runByName.WCAWE.diagnostics.wcawe_moment_reconstruction_error,
+    uDiagonalRatio: runByName.WCAWE.basisCondition.uDiagonalRatio,
+    orthogonalityError: runByName.WCAWE.basisCondition.orthogonalityError,
+    basisRelationResidual: runByName.WCAWE.diagnostics.wcawe_basis_relation_residual_max
+      ?? runByName.WCAWE.diagnostics.wcawe_moment_reconstruction_error,
   },
   notes: [
     "Primary accuracy metrics use pointwise relative magnitude error: (ROM - HFSS) / max(abs(HFSS), 1e-12).",
     "Global relative L2 error is also reported because pointwise relative error can be amplified near deep S-parameter nulls.",
     "Absolute magnitude and dB errors are retained as secondary diagnostics.",
     "AWE is a scalar Pade approximation rather than a Galerkin ROM, so rom_dimension is zero by design.",
-    "AWE order 12 generates 24 full-system moments; GAWE, WCAWE and MGAWE use 12 candidate vectors and 12 factorized RHS solves.",
     ...(includeAlps ? ["ALPS builds independent S11/S21 two-sided Lanczos-Pade models at scalar order q=12; each reduced model has dimension 12 and the two sequences retain 24 columns in total."] : []),
     "The four-port model requires all outgoing ports for a full passivity balance; S11 and S21 alone are not used as a passivity metric.",
   ],
 };
-
-writeCsv(path.join(outputDir, outputStem + "_comparison.csv"), comparisonRows);
-writeCsv(path.join(outputDir, outputStem + "_summary.csv"), summaryRows);
-fs.writeFileSync(
-  path.join(outputDir, outputStem + "_report.json"),
-  `${JSON.stringify(report, null, 2)}\n`,
-  "utf8",
-);
 
 // 将两种算法、HFSS 曲线和相对幅值误差绘制在一张四面板 SVG 中。
 const width = 1360;
@@ -504,7 +532,7 @@ let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`;
 svg += `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n`;
 svg += `<rect width="100%" height="100%" fill="#ffffff"/>\n`;
 svg += `<text x="${width / 2}" y="31" text-anchor="middle" font-family="Segoe UI, Arial" font-size="23" font-weight="700">IOStructure: ${titleAlgorithms} versus HFSS</text>\n`;
-svg += `<text x="${width / 2}" y="55" text-anchor="middle" font-family="Segoe UI, Arial" font-size="12" fill="#555555">90-100 GHz, 101 points, PARDISO Release, production accuracy configurations</text>\n`;
+svg += `<text x="${width / 2}" y="55" text-anchor="middle" font-family="Segoe UI, Arial" font-size="12" fill="#555555">${fMin}-${fMax} GHz, ${hfss.length} points</text>\n`;
 
 for (const panel of panels) {
   svg += `<g font-family="Segoe UI, Arial" font-size="11">\n`;
@@ -543,6 +571,12 @@ runs.forEach((run, index) => {
 });
 svg += `</g>\n</svg>\n`;
 
-fs.writeFileSync(path.join(outputDir, outputStem + "_comparison.svg"), svg, "utf8");
+const outputDir = publishComparison(resultsRoot, "result_COMPARE_IOStructure", (directory) => {
+  writeCsv(path.join(directory, outputStem + "_comparison.csv"), comparisonRows);
+  writeCsv(path.join(directory, outputStem + "_summary.csv"), summaryRows);
+  fs.writeFileSync(path.join(directory, outputStem + "_report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  fs.writeFileSync(path.join(directory, outputStem + "_comparison.svg"), svg, "utf8");
+});
 
+console.log(`Output directory: ${outputDir}`);
 console.log(JSON.stringify(report, null, 2));

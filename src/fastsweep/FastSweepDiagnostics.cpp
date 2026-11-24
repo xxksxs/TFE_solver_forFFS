@@ -4,6 +4,8 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <locale>
+#include <stdexcept>
 
 namespace fem::fastsweep {
 
@@ -24,6 +26,11 @@ void writeJsonString(std::ostream& out, const std::string& value) {
     out << '"';
 }
 
+void writeOptionalNumber(std::ostream& out, std::optional<double> value) {
+    if (value && std::isfinite(*value)) out << *value;
+    else out << "null";
+}
+
 }  // namespace
 
 // 计算 lossless 二端口中 |S11|^2+|S21|^2 偏离 1 的最大值。
@@ -33,7 +40,7 @@ double maxPassivityError(const std::vector<SParameterPoint>& points) {
         const double s11 = std::abs(point.s11);
         const double s21 = std::abs(point.s21);
         maxError = std::max(
-            maxError, std::abs(s11 * s11 + s21 * s21 - 1.0));
+            maxError, s11 * s11 + s21 * s21 - 1.0);
     }
     return maxError;
 }
@@ -45,6 +52,7 @@ bool writeDiagnosticsJson(const std::filesystem::path& path,
     if (!output.good()) {
         return false;
     }
+    output.imbue(std::locale::classic());
     const auto& d = diagnostics;
     output << std::setprecision(17);
     output << "{\n";
@@ -60,12 +68,67 @@ bool writeDiagnosticsJson(const std::filesystem::path& path,
         output << d.expansionFrequenciesHz[index];
     }
     output << "],\n";
+    output << "  \"model\": ";
+    writeJsonString(output, d.model);
+    output << ",\n";
+    output << "  \"local_orders\": [";
+    for (std::size_t i = 0; i < d.localOrders.size(); ++i) {
+        if (i != 0) output << ", ";
+        output << d.localOrders[i];
+    }
+    output << "],\n";
+    output << "  \"stopping_reason\": ";
+    writeJsonString(output, d.stoppingReason);
+    output << ",\n  \"maximum_relative_residual\": ";
+    if (d.maximumRelativeResidual >= 0.0 && std::isfinite(d.maximumRelativeResidual)) output << d.maximumRelativeResidual;
+    else output << "null";
+    const char* acceptance = "not_evaluated";
+    if (!d.residualSamples.empty()) {
+        if (!d.trueResidualTolerance) acceptance = "diagnostic_only";
+        else if (!d.unmetFrequenciesHz.empty()) acceptance = "unmet";
+        else if (std::any_of(d.residualSamples.begin(), d.residualSamples.end(),
+                            [](const SweepResidualSample& sample) { return !sample.zeroRhs; })) {
+            acceptance = "met";
+        }
+    }
+    output << ",\n  \"true_residual_acceptance\": ";
+    writeJsonString(output, acceptance);
+    if (!d.residualSamples.empty()) {
+        output << ",\n  \"true_residual_tolerance\": ";
+        writeOptionalNumber(output, d.trueResidualTolerance);
+        output << ",\n  \"unmet_frequencies_hz\": [";
+        for (std::size_t i = 0; i < d.unmetFrequenciesHz.size(); ++i) {
+            if (i) output << ", ";
+            output << d.unmetFrequenciesHz[i];
+        }
+        output << "],\n  \"residual_samples\": [";
+        for (std::size_t i = 0; i < d.residualSamples.size(); ++i) {
+            const auto& sample = d.residualSamples[i];
+            if (i) output << ',';
+            output << "\n    {\"frequency_hz\": " << sample.frequencyHz
+                   << ", \"zero_rhs\": " << (sample.zeroRhs ? "true" : "false")
+                   << ", \"near_cutoff\": " << (sample.nearCutoff ? "true" : "false")
+                   << ", \"true_absolute_residual\": ";
+            writeOptionalNumber(output, sample.trueAbsolute);
+            output << ", \"true_relative_residual\": ";
+            writeOptionalNumber(output, sample.trueRelative);
+            output << ", \"taylor_relative_residual\": ";
+            writeOptionalNumber(output, sample.taylorRelative);
+            output << '}';
+        }
+        output << "\n  ]";
+    }
+    output << ",\n  \"full_moment_projection_error\": ";
+    if (d.fullMomentProjectionError >= 0.0 && std::isfinite(d.fullMomentProjectionError)) output << d.fullMomentProjectionError;
+    else output << "null";
+    output << ",\n";
     output << "  \"requested_order\": " << d.requestedOrder << ",\n";
     output << "  \"rom_dimension\": " << d.romDimension << ",\n";
     output << "  \"retained_columns\": " << d.retainedColumns << ",\n";
     output << "  \"deflated_columns\": " << d.deflatedColumns << ",\n";
     output << "  \"basis_orthogonality_error\": "
            << d.basisOrthogonalityError << ",\n";
+    output << "  \"pade_coefficient_matching_error\": " << d.padeCoefficientMatchingError << ",\n";
     output << "  \"pade_input_pivot_ratio\": "
            << d.padeInputPivotRatio << ",\n";
     output << "  \"pade_output_pivot_ratio\": "
@@ -128,8 +191,12 @@ bool writeDiagnosticsJson(const std::filesystem::path& path,
     output << "  \"max_passivity_error\": "
            << d.maxPassivityError << "\n";
     output << "}\n";
-    output.flush();
-    return output.good();
+    output.close();
+    if (!output) throw std::runtime_error("Incomplete diagnostics write: " + path.string());
+    if (!d.reducedSolveSucceeded) {
+        throw std::runtime_error("A reduced solve failed; see " + path.string());
+    }
+    return true;
 }
 
 }  // namespace fem::fastsweep

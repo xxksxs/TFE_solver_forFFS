@@ -1,6 +1,8 @@
 # 开发流程文档索引
 
-本目录说明扩展求解器时建议遵循的安全流程。
+项目修改统一遵循[代码与文档修改规范](change-policy.md)，并在[变更记录](../changes/README.md)留痕。本目录提供具体流程和审查清单。
+
+新 Agent 从[快速接手指南](agent-handoff.md)开始。任务交接时使用[交接模板](handoff-template.md)。
 
 ## 阅读顺序
 

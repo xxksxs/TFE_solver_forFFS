@@ -7,7 +7,7 @@
 在扫频中心附近运行一个频点：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result --max-sweep-points 1
+.\build\Release\bp_fem_solver.exe --aedt IOStructure.aedt --mesh current.ngmesh --out result --max-sweep-points 1
 ```
 
 ## 检查项
@@ -22,7 +22,7 @@
 修改高阶基函数、拓扑或装配后，应额外运行：
 
 ```powershell
-.\build\Release\bp_fem_solver.exe --aedt wg_bp_filter.aedt --mesh current.ngmesh --out result --max-sweep-points 1 --basis-order 1
+.\build\Release\bp_fem_solver.exe --aedt IOStructure.aedt --mesh current.ngmesh --out result --max-sweep-points 1 --basis-order 1
 ```
 
 期望日志显示 `Nedelec basis order: 1` 和 `Local basis functions per tetrahedron: 20`。

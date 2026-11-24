@@ -101,7 +101,7 @@ AWE / GAWE / MGAWE / WCAWE 已接入 CLI：
 .\build_pardiso\Release\bp_fem_solver.exe --basis-order 1 --max-sweep-points 101 --sweep wcawe --wcawe-order 12 --no-write-all-fields --out result
 ```
 
-其中 GAWE 是单展开点 Galerkin AWE：先生成局部 AWE 矩向量，再正交化并投影为一个 ROM；MGAWE 使用多个展开点的局部 AWE/GAWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 使用单展开点传统 AWE 矩序列生成良条件正交基，并输出 `basis_condition.csv` 记录 AWE/WCAWE 条件曲线。下一步是多点 WCAWE 和自适应展开点。
+其中 GAWE 是单展开点 Galerkin AWE：先生成局部 AWE 矩向量，再正交化并投影为一个 ROM；MGAWE 使用多个展开点的局部 AWE/GAWE 矩向量，统一正交化为一个 Galerkin ROM。WCAWE 在单展开点用校正递推生成正交基，并在 `basis_condition.csv` 记录 U 对角元、正交性和递推残差。下一步是多点 WCAWE 和自适应展开点。
 
 AWE / GAWE / MGAWE / WCAWE 的模块化算法 skill 与校验方法见 `awe-family/README.md`。这组文档把显式 Padé AWE、单点/多点 Galerkin AWE 和良条件 AWE 拆成可独立实现、可抽离的 fast-sweep 子模块。
 

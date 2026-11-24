@@ -9,6 +9,7 @@
 #include "bpfem/sweep/ISweepStrategy.hpp"
 
 #include <complex>
+#include <utility>
 #include <vector>
 
 namespace fem::sweep {
@@ -16,6 +17,12 @@ namespace fem::sweep {
 struct MgaweOptions {
     // Number of expansion points distributed over the requested sweep band.
     int expansionPointCount = 3;
+    bool adaptive = false;
+    bool adaptiveTrueResidual = false;
+    double trueResidualTolerance = 1.0e-3;
+    bool useLastPolynomial = false;
+    std::vector<std::pair<double, int>> expansions;
+    bool polynomialProjection = false;
 
     // Local AWE moment vectors generated per expansion point before global
     // orthogonalization/deflation.
@@ -55,16 +62,17 @@ public:
     double lastRomProjectionSec() const { return romProjectionSec_; }
 
 private:
-    std::vector<std::vector<Complex>> buildLocalMoments(
-        double expansionFrequencyHz,
-        linalg::ISparseSolver& solver,
-        const linalg::SolverConfig& solverConfig,
-        const std::vector<std::vector<Complex>>& portVectors) const;
+    using PortTaylorSeries = fastsweep::PolynomialPortMomentBuilder::PortTaylorSeries;
 
     bool appendIfIndependent(std::vector<Complex>&& w);
     void projectReducedModel(const std::vector<std::vector<Complex>>& portVectors);
-    std::vector<Complex> solveReduced(double frequencyHz) const;
-    const PortMode& virtualPortMode(int virtualPortIndex) const;
+    int build(std::vector<double>& expansionFrequencies,
+              const std::vector<double>& sweepFrequencies,
+              linalg::ISparseSolver& solver, const linalg::SolverConfig& solverConfig);
+    const PortTaylorSeries* polynomialAt(double frequencyHz) const;
+    std::optional<double> assessTrueResiduals(const std::vector<double>& frequencies,
+        const std::vector<double>& expansions, const std::vector<bool>& expandable);
+    const PortTaylorSeries* requirePolynomialAt(double frequencyHz) const;
 
     const ProjectDefinition& project_;
     const FEMAssembler& assembler_;
@@ -73,9 +81,6 @@ private:
 
     bool ready_ = false;
     int romDim_ = 0;
-    int fullDim_ = 0;
-    int numProjectPorts_ = 0;
-    int numVirtualPorts_ = 0;
     int retainedColumns_ = 0;
     int deflatedColumns_ = 0;
     double orthogonalizationSec_ = 0.0;
@@ -84,6 +89,13 @@ private:
     FEMAssembler::AffineSystem affine_;
     std::vector<std::vector<Complex>> basis_;
     fastsweep::GalerkinReducedModel model_;
+    std::vector<PortTaylorSeries> polynomials_;
+    std::vector<int> localOrders_;
+    double maxRelativeResidual_ = 0.0;
+    bool adaptiveConverged_ = false;
+    std::string engineeringStopReason_;
+    std::vector<fastsweep::SweepResidualSample> residualSamples_;
+    std::vector<double> unmetFrequenciesHz_;
 };
 
 }  // namespace fem::sweep

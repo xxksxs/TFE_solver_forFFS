@@ -64,7 +64,7 @@ bp_fem_solver.exe `
   --mesh <mesh.ngmesh> `
   --basis-order 0|1 `
   --port-method numerical|analytic|tfe `
-  --linear-solver auto|direct|bicgstab|gmres `
+  --linear-solver auto|direct|bicgstab|gmres|mumps `
   --sweep direct|awe|gawe|mgawe|wcawe|alps `
   --out result
 ```
@@ -79,7 +79,7 @@ bp_fem_solver.exe `
 | `--max-sweep-points` | 从工程扫频中最多取多少个频点 |
 | `--port-method` | 数值端口、解析 TE10 或多模 TFE |
 | `--linear-solver` | 自动路由、PARDISO 直接法或迭代法 |
-| `--precon` | `none`、`jacobi` 或 `ilu0`，只对迭代法生效 |
+| `--precon` | `none`、`jacobi`、`ilu0` 或 `schwarz`，只对迭代法生效 |
 | `--sweep` | 选择直接扫频或快速扫频策略 |
 | `--write-all-fields` | 为每个频点写 VTU |
 | `--no-write-all-fields` | 只保留最后频点场，长扫频推荐 |
@@ -89,6 +89,8 @@ bp_fem_solver.exe `
 参数解析和默认值以 `src/app/Application.cpp` 为准。新增参数时必须同步 CLI 帮助、README/本文和 smoke test。
 
 ## 扫频策略
+
+当前 AWE 逐场 Padé（`--awe-field-pade`）、MGAWE 固定点与自适应（`--mgawe-expansion`、`--mgawe-adaptive`、`--mgawe-2001`）以及 WCAWE 独立矩检查（`--wcawe-check-moments`）的参数和限制见[公式复现](optimization/awe-family/paper-reproduction.md)。
 
 ### Direct
 
@@ -158,11 +160,11 @@ bp_fem_solver.exe `
 - `direct`：强制 PARDISO；无 MKL 构建应明确报错。
 - `bicgstab`、`gmres`：迭代后端，保留 Jacobi/ILU0 扩展接口。
 
-当前常规预条件器对频域 H(curl) 不定系统的效果有限。生产基准和 fast-sweep 离线阶段优先使用 PARDISO。支持分解复用的后端通过 `IFactorizedSparseSolver` 暴露 `factorize`、`solveFactorized` 和批量 RHS 能力。
+当前工作树还提供可选 MUMPS 后端、PARDISO out-of-core、Schwarz 预条件和 MKL SpMV 入口。构建依赖和组合限制见[求解器选择](architecture/solver-selection.md)。常规预条件器对频域 H(curl) 不定系统的效果需按具体算例验证。生产基准和 fast-sweep 离线阶段优先使用 PARDISO。支持分解复用的后端通过 `IFactorizedSparseSolver` 暴露 `factorize`、`solveFactorized` 和批量 RHS 能力。
 
 ## 结果目录与文件
 
-`--out result` 会映射到固定算法子目录：
+`--out result` 首次成功时写入相应算法子目录。
 
 ```text
 result/
@@ -174,7 +176,11 @@ result/
   result_WCAWE/
 ```
 
-每次运行只清空当前算法对应的子目录。不要按频点数或时间戳创建新的结果目录。
+已有同名目录时，新运行发布到 `result_<算法>-<运行标识>`。控制台的 `Output directory:` 和 `run.json` 的 `result_directory` 给出本次最终路径。批处理从这两个位置获取路径。比较脚本可用 `--run WCAWE=<目录>` 等参数显式选中重跑结果。
+
+成功标志为最终目录中的 `run.json` 且 `status` 为 `ok`。运行中的文件位于同一输出根目录下的 `.bpfem-pending-*`。失败返回非零，并在可写时保留 `run.log`、`run.crash.log` 与 `status: fatal` 的报告。诊断的真实残差是否达到阈值见 `diagnostics.json` 的 `true_residual_acceptance`。
+
+运行记录保存 AEDT、网格、源码与可执行文件的 SHA-256、编译特性、Git 源码状态和实际线性求解后端。Windows 的文件哈希使用系统 CNG。Linux 和 macOS 构建需要 OpenSSL Crypto，包括关闭 MKL 的基础构建。
 
 通用输出：
 
@@ -202,6 +208,10 @@ python scripts/compare_with_hfss.py `
 ```
 
 IOStructure 专用对比逻辑位于 `scripts/compare_ios_fastsweeps.mjs`。主要指标使用 S11/S21 幅值相对 L2 误差；深零点应同时报告绝对幅值误差，避免逐点相对误差失真。
+
+使用 `--direct` 时，脚本按 AEDT 和网格 SHA-256、棱元阶数、端口方法、TFE 模态数及实际频点匹配各次运行。显式使用 `--allow-legacy` 可对照无指纹的历史报告，结果标为 `legacy-path-only`。通用 HFSS 脚本也支持历史裸 CSV，并标为 `legacy-csv-only`。HFSS CSV 的 SHA-256 用于定位参考数据。刻意比较不同端口方式时，通过通用脚本传入 `--allow-physical-variation`。频点需要插值时传入 `--interpolate`。
+
+使用 `python scripts/archive_run.py <运行目录> <算例目录> --label <批次名> --aedt <工程文件名>` 可归档已完成的 schema 2 运行。脚本比较算例 `project/` 中 AEDT 和网格的 SHA-256，逐文件核对并写出 `SHA256SUMS.txt`。默认网格文件名为 `current.ngmesh`。
 
 ## 模块边界
 

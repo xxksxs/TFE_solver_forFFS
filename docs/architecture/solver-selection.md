@@ -1,7 +1,7 @@
 # 求解器选择
 
 本文说明应用层如何选择线性求解器、预条件和扫频策略。Phase 1 接口化后，
-所有运行时分发都走工厂；编译期 `BPFEM_USE_MKL` 只剩一处合法使用。
+应用层通过工厂分发。构建宏也用于条件编译求解器后端。
 
 ## 选择逻辑
 
@@ -12,30 +12,31 @@
 - **`direct`**：始终返回 `PardisoBackend`。若构建时 `BPFEM_USE_MKL=OFF`，
   在 `solve()` 调用时抛出 runtime_error，提示重新构建或回退到 bicgstab。
 - **`bicgstab`**：始终返回 `BiCGStabBackend`，即使有 MKL。
-- **`gmres`**：返回 `GmresBackend`（restart 默认 30，可通过 `--gmres-restart`
-  调整）。无预条件 / 加 Jacobi / 加 ILU(0) 都可挂上，但**对当前装配的频域
-  H(curl) indefinite 系统都不收敛**——实际收敛需要 AMS / Schwarz / shifted
-  Laplacian 这些 H(curl) 专用预条件，目前未实现，框架保留为 plug-in 接口。
+- **`gmres`**：复数 GMRES，默认重启长度 30，用 `--gmres-restart` 调整。
+- **`mumps`**：可选复数直接后端。需使用 `-DBPFEM_USE_MUMPS=ON` 配置，支持 `--mumps-mode incore|ooc|blr`。
+- PARDISO 可用 `--pardiso-mode incore|ooc`。迭代后端支持 `--iterative-spmv native|mkl`，MKL 路径要求 oneMKL 构建。
 
 实现位于 `src/factory/SparseSolverFactory.cpp::makeSparseSolver(options)`。
-**这是仓库里唯一允许出现 `BPFEM_USE_MKL` 求解器分支的文件。**
+此处负责运行时后端选择和选项组合校验。
 
 ### 预条件（`--precon`）
 
 - **`none`**（默认）：无预条件，BiCGSTAB / GMRES 走原始未修改的迭代序列。
-- **`jacobi`**：对角预条件。等价于对 A 做对角归一化 `D^(-1/2) A D^(-1/2)`。
+- **`jacobi`**：对向量应用复对角逆，极小或缺失的对角项使用保护处理。
 - **`ilu0`**：零填充 ILU 因式分解。
 
-**注意**：`jacobi` 和 `ilu0` 在频域 indefinite H(curl) 系统（本仓库装配的 `A = K - k₀² M + jβ m mᵀ`）上**不能让 BiCGSTAB / GMRES 收敛**。已在 BP filter 上验证：
+- **`schwarz`**：重叠子域预条件。局部后端由 `--schwarz-local-solver pardiso|mumps` 选择，要求相应构建支持。局部 MUMPS 仅支持 `incore` 或 `blr`。
+
+以下是旧版 BP filter 试验记录。适用范围为当时的配置，详细参数待核实。
 
 | 配置 | iter | residual |
 |---|---|---|
 | BiCGSTAB + Jacobi | 4000 | 0.91 |
 | GMRES(50) + ILU(0) | 1500 | 0.98 |
 
-这是 H(curl) 频域 Maxwell 的公开领域知识：indefinite 谱跨原点，对角型 / 局部 LU 型预条件都不能消除原点附近的奇点。**真正能跑通的预条件是 AMS (Hiptmair-Xu) / Schwarz-DDM / shifted Laplacian + multigrid**，工程成本 ~2000+ 行，且需要离散梯度算子 G 等额外结构。
+频域 H(curl) 不定系统的收敛取决于离散、预条件器和频点，应报告残差、迭代上限及未收敛点。当前新增后端的性能与发布状态待验证。
 
-仅对 `bicgstab` / `gmres` 生效；对 `direct` 时静默忽略并 stderr 警告。
+预条件只对 `bicgstab` / `gmres` 生效。选中 PARDISO 或 MUMPS 时，工厂忽略预条件并输出警告。
 
 **当前推荐**：默认 PARDISO；GMRES + ILU(0) 框架作为后续 AMS 等更复杂预条件的 plug-in 接口保留，**不**作为现阶段 BP filter 求解路径推荐。
 
@@ -43,7 +44,8 @@
 
 - **`direct`**（默认）：`sweep::DirectSweep`。每个频点重装配 + 直接求解 + 后处理。
   唯一支持 per-frequency VTU 输出的路径。
-- **`alps`**：`sweep::AlpsSweep`。单点展开 Krylov MOR，仅支持 lossless 材料。
+- **`alps`**：单点双边 Lanczos–Padé，见 [ALPS 专题](../optimization/alps-sweep/README.md)。
+- **`awe`、`gawe`、`mgawe`、`wcawe`**：详见[工程参考](../engineering-reference.md)和[公式复现](../optimization/awe-family/paper-reproduction.md)。
 
 实现位于 `src/factory/SweepStrategyFactory.cpp::makeSweepStrategy(...)`。
 

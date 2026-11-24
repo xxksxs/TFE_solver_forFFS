@@ -242,8 +242,9 @@ AlpsSweep::LocalPadeModel AlpsSweep::buildLocalModel(
         std::chrono::steady_clock::now() - linearizationStarted).count();
 
     linalg::FactorizedSolveSession solveSession(
-        solver, linearization.matrixAtExpansion, solverConfig, false);
+        solver, linearization.matrixAtExpansion, solverConfig);
     const auto expansionSolve = solveSession.solve(linearization.rhs0);
+    linalg::requireConverged(expansionSolve, solver.name());
     if (expansionSolve.field.size() != static_cast<std::size_t>(fullDim_)) {
         throw std::runtime_error("AlpsSweep: expansion solve returned the wrong field size");
     }
@@ -258,7 +259,9 @@ AlpsSweep::LocalPadeModel AlpsSweep::buildLocalModel(
         for (std::size_t i = 0; i < rhs.size(); ++i) {
             rhs[i] = -rhs[i] + linearization.rhs1[i] * state.back();
         }
-        auto result = augmentedField(solveSession.solve(rhs).field, Complex(0.0, 0.0));
+        const auto solved = solveSession.solve(rhs);
+        linalg::requireConverged(solved, solver.name());
+        auto result = augmentedField(solved.field, Complex(0.0, 0.0));
         lanczosOperatorSec_ += std::chrono::duration<double>(
             std::chrono::steady_clock::now() - started).count();
         return result;
@@ -280,6 +283,9 @@ AlpsSweep::LocalPadeModel AlpsSweep::buildLocalModel(
         rhsBatch.push_back(std::move(rightRhs));
         rhsBatch.push_back(std::move(leftRhs));
         auto solved = solveSession.solveBatch(rhsBatch);
+        for (const auto& solution : solved) {
+            linalg::requireConverged(solution, solver.name());
+        }
         Vector leftImage = fastsweep::PolynomialPortMomentBuilder::applyLosslessFirstOrderMatrix(
             affine_, linearization, portVectors_, solved[1].field);
         for (auto& value : leftImage) {

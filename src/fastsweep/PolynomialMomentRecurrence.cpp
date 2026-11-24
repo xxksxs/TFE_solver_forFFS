@@ -28,7 +28,8 @@ PolynomialMomentRecurrence::generatePolynomialMoments(
     std::size_t momentCount,
     const RhsCoefficientFunction& rhsCoefficientAt,
     const std::vector<LinearOperator>& matrixCoefficientOperators,
-    const SolveFunction& solveAtExpansion) {
+    const SolveFunction& solveAtExpansion,
+    const AcceptRightHandSide& accept) {
     if (momentCount == 0) {
         throw std::runtime_error(
             "PolynomialMomentRecurrence: at least one moment is required");
@@ -63,6 +64,7 @@ PolynomialMomentRecurrence::generatePolynomialMoments(
             }
         }
 
+        if (accept && !accept(rhs)) break;
         std::vector<Complex> x = solveAtExpansion(rhs);
         if (x.size() != dimension) {
             throw std::runtime_error(

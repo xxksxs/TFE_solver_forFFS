@@ -102,7 +102,7 @@ bool denseSolve(std::vector<Complex>& a,
                 pivotRow = r;
             }
         }
-        if (pivotMag < 1.0e-30) {
+        if (!std::isfinite(pivotMag) || pivotMag < 1.0e-30) {
             return false;
         }
         minPivot = std::min(minPivot, pivotMag);
@@ -131,7 +131,11 @@ bool denseSolve(std::vector<Complex>& a,
         for (int c = r + 1; c < n; ++c) {
             sum -= a[idx(r, c, n)] * rhs[static_cast<std::size_t>(c)];
         }
-        rhs[static_cast<std::size_t>(r)] = sum / a[idx(r, r, n)];
+        const Complex solution = sum / a[idx(r, r, n)];
+        if (!std::isfinite(solution.real()) || !std::isfinite(solution.imag())) {
+            return false;
+        }
+        rhs[static_cast<std::size_t>(r)] = solution;
     }
 
     if (pivotRatio != nullptr) {

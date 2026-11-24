@@ -4,6 +4,9 @@
 
 namespace fem::bc {
 
+// Retains the existing full-order boundary convention below cutoff.
+double wavePortAdmittance(double k0Squared, double cutoffSquared);
+
 // Wave-port boundary condition.
 //
 // Reads the project's port list from AssemblyContext::project and consumes

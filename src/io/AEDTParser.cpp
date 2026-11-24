@@ -42,12 +42,10 @@ void AEDTParser::parseMaterials(const std::string& text, ProjectDefinition& proj
         Material material;
         material.name = (*it)[1].str();
         const std::string body = (*it)[2].str();
-        if (body.find("permittivity=") == std::string::npos && body.find("conductivity=") == std::string::npos) {
-            continue;
-        }
-        const auto eps = captureValue(body, R"(permittivity='([^']+)')");
-        const auto mu = captureValue(body, R"(permeability='([^']+)')");
-        const auto sigma = captureValue(body, R"(conductivity='([^']+)')");
+        const auto eps = captureValue(body, R"((?:^|\s)permittivity='([^']+)')");
+        const auto mu = captureValue(body, R"((?:^|\s)permeability='([^']+)')");
+        const auto sigma = captureValue(body, R"((?:^|\s)conductivity='([^']+)')");
+        if (!eps && !mu && !sigma) continue;
         if (eps) material.relativePermittivity = parseEngineeringValue(*eps);
         if (mu) material.relativePermeability = parseEngineeringValue(*mu);
         if (sigma) material.conductivity = parseEngineeringValue(*sigma);
@@ -55,6 +53,15 @@ void AEDTParser::parseMaterials(const std::string& text, ProjectDefinition& proj
     }
     if (project.materials.empty()) {
         project.materials["vacuum"] = Material{"vacuum", 1.0, 1.0, 0.0};
+    }
+    const std::regex attributesPattern(R"(\$begin 'Attributes'([\s\S]*?)\$end 'Attributes')");
+    for (std::sregex_iterator it(text.begin(), text.end(), attributesPattern), last; it != last; ++it) {
+        const std::string attributes = (*it)[1].str();
+        const auto name = captureValue(attributes, R"((?:^|\s)Name='([^']+)')");
+        const auto material = captureValue(attributes, R"mat((?:^|\s)MaterialValue='"?([^'"]+)"?')mat");
+        if (name && material) {
+            project.bodyMaterials[*name] = *material;
+        }
     }
 }
 
@@ -70,6 +77,16 @@ void AEDTParser::parsePorts(const std::string& text, ProjectDefinition& project)
     const std::regex portPattern(R"(\$begin '([0-9]+)'([\s\S]*?)\$end '\1')");
     for (std::sregex_iterator it(text.begin(), text.end(), portPattern), end; it != end; ++it) {
         const std::string body = (*it)[2].str();
+        if (body.find("BoundType='Perfect E'") != std::string::npos) {
+            const auto faces = captureValue(body, R"(Faces\(([\d,\s]+)\))");
+            if (faces) {
+                const std::regex idPattern(R"(\d+)");
+                for (std::sregex_iterator face(faces->begin(), faces->end(), idPattern), last;
+                     face != last; ++face) {
+                    project.explicitPecFaces.push_back(std::stoi(face->str()));
+                }
+            }
+        }
         if (body.find("BoundType='Wave Port'") == std::string::npos) {
             continue;
         }

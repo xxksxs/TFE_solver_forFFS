@@ -1,4 +1,5 @@
 #include "bpfem/linalg/MklPardisoSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 
 #ifdef BPFEM_USE_MKL
 #include <mkl.h>
@@ -12,26 +13,8 @@
 #include <vector>
 
 namespace fem {
-namespace {
-
-// 使用原始稀疏矩阵计算相对残差，避免读取 PARDISO 的数值工作数组。
-double relativeResidual(const SparseMatrix& matrix,
-                        const std::vector<std::complex<double>>& x,
-                        const std::vector<std::complex<double>>& b) {
-    const auto ax = matrix.multiply(x);
-    double r2 = 0.0;
-    double b2 = 0.0;
-    for (std::size_t i = 0; i < b.size(); ++i) {
-        r2 += std::norm(ax[i] - b[i]);
-        b2 += std::norm(b[i]);
-    }
-    return std::sqrt(r2) / std::max(std::sqrt(b2), 1.0e-300);
-}
-
-}  // namespace
-
 // 初始化 PARDISO 控制参数；矩阵类型为复对称矩阵。
-MklPardisoSolver::MklPardisoSolver() {
+MklPardisoSolver::MklPardisoSolver(bool outOfCore) : outOfCore_(outOfCore) {
 #ifdef BPFEM_USE_MKL
     initializeParameters();
 #endif
@@ -59,6 +42,10 @@ void MklPardisoSolver::initializeParameters() {
     iparm_[18] = -1;
     iparm_[26] = 1;
     iparm_[34] = 1;
+    if (outOfCore_) {
+        iparm_[23] = 1;
+        iparm_[59] = 2;
+    }
 }
 
 // 判断新的矩阵是否可以复用当前符号分析结果。
@@ -108,6 +95,12 @@ void MklPardisoSolver::analyzePattern(
     }
     analyzed_ = true;
     ++statistics_.symbolicAnalysisCount;
+    const auto estimatedPeakKiB = std::max(iparm_[14], iparm_[15]
+        + (outOfCore_ ? iparm_[62] : iparm_[16]));
+    if (estimatedPeakKiB > 0) {
+        statistics_.estimatedSolverPeakKiB = std::max(
+            statistics_.estimatedSolverPeakKiB, static_cast<std::uint64_t>(estimatedPeakKiB));
+    }
 }
 
 // 释放 PARDISO 的全部内部内存，并清空当前分解标记。
@@ -133,22 +126,24 @@ void MklPardisoSolver::release() {
     n_ = 0;
     analyzed_ = false;
     factorized_ = false;
+    initializeParameters();
 }
 #endif
 
 // 兼容旧的一次性求解接口：先分解矩阵，再对单个 RHS 回代。
 SolveResult MklPardisoSolver::solve(
     const SparseMatrix& matrix,
-    const std::vector<std::complex<double>>& rhs) {
+    const std::vector<std::complex<double>>& rhs, double tolerance) {
 #ifndef BPFEM_USE_MKL
     (void)matrix;
     (void)rhs;
+    (void)tolerance;
     throw std::runtime_error(
         "MKL PARDISO solver was requested, but this binary was built without BPFEM_USE_MKL.");
 #else
     factorize(matrix);
     SolveResult result = solveFactorized(rhs);
-    result.residual = relativeResidual(matrix, result.field, rhs);
+    linalg::checkResidual(matrix, rhs, tolerance, result);
     return result;
 #endif
 }

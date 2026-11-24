@@ -73,7 +73,9 @@ $$
 - GalerkinReducedModel：统一投影、在线求解、S 参数和场重构。
 - WcaweDiagnostics：记录论文关系残差和性能数据。
 
-## 当前代码审计结论
+## 历史 P1 代码审计结论
+
+本节记录旧 P1 配置。现行 WCAWE CLI 使用高阶 Taylor 系数构基，在线投影同一组多项式，见[公式复现](paper-reproduction.md)。
 
 当前 `WcaweSweep` 已不再调用 `generateLosslessMoments()` 或保存完整传统 AWE 矩。它通过 `PolynomialWcaweRecurrence` 逐阶组装论文式 (7)，用 `UpperTriangularBlockAction` 对式 (9) 的连续主子块执行逆序三角回代，并在每次 MGS 后立即把系数写入固定步长 `U`，供下一阶候选使用。
 

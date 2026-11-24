@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <iosfwd>
 #include <memory>
@@ -64,7 +65,8 @@ public:
     // Open `path` for truncate-and-write and tee subsequent output to it.
     // If the file cannot be opened, an info() line records the failure and
     // only the console destination remains.
-    void attachLogFile(const std::string& path);
+    bool attachLogFile(const std::filesystem::path& path);
+    bool closeLogFile();
 
     // ---- Lines that go to console + log file ----
     void banner();

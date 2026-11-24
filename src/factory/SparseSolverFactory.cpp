@@ -2,9 +2,11 @@
 
 #include "bpfem/linalg/BiCGStabBackend.hpp"
 #include "bpfem/linalg/GmresBackend.hpp"
+#include "bpfem/linalg/MumpsBackend.hpp"
 #include "bpfem/linalg/PardisoBackend.hpp"
 #include "bpfem/linalg/PreconIlu0.hpp"
 #include "bpfem/linalg/PreconJacobi.hpp"
+#include "bpfem/linalg/PreconSchwarz.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -13,12 +15,44 @@ namespace fem::factory {
 
 namespace {
 
-std::shared_ptr<linalg::IPreconditioner> makePreconditioner(PreconditionerKind kind) {
-    switch (kind) {
+linalg::MumpsMode mumpsMode(const Options& options) {
+    if (options.mumpsMode == "blr") return linalg::MumpsMode::BlockLowRank;
+    if (options.mumpsMode == "ooc") return linalg::MumpsMode::OutOfCore;
+    return linalg::MumpsMode::InCore;
+}
+
+std::shared_ptr<linalg::IPreconditioner> makePreconditioner(const Options& options) {
+    switch (options.preconditioner) {
         case PreconditionerKind::Jacobi:
             return std::make_shared<linalg::PreconJacobi>();
         case PreconditionerKind::Ilu0:
             return std::make_shared<linalg::PreconIlu0>();
+        case PreconditionerKind::Schwarz: {
+            linalg::PreconSchwarz::LocalSolverFactory createLocalSolver;
+            if (options.schwarzLocalMumps) {
+#ifdef BPFEM_USE_MUMPS
+                const auto mode = mumpsMode(options);
+                if (mode == linalg::MumpsMode::OutOfCore) {
+                    throw std::invalid_argument("Local MUMPS supports incore or blr; ooc is for global solves");
+                }
+                const auto tolerance = options.mumpsBlrTolerance;
+                const auto path = options.outDir;
+                createLocalSolver = [mode, tolerance, path] {
+                    return std::make_unique<linalg::MumpsBackend>(mode, tolerance, path);
+                };
+#else
+                throw std::invalid_argument("Schwarz with local MUMPS requires -DBPFEM_USE_MUMPS=ON");
+#endif
+            } else {
+#ifdef BPFEM_USE_MKL
+                createLocalSolver = [] { return std::make_unique<linalg::PardisoBackend>(); };
+#else
+                throw std::invalid_argument("Schwarz with local PARDISO requires Intel oneMKL");
+#endif
+            }
+            return std::make_shared<linalg::PreconSchwarz>(
+                options.schwarzSubdomains, options.schwarzOverlap, std::move(createLocalSolver));
+        }
         case PreconditionerKind::None:
         default:
             return nullptr;
@@ -36,9 +70,25 @@ void warnPreconIgnored(PreconditionerKind kind, const char* backendName) {
 }  // namespace
 
 std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) {
+#ifndef BPFEM_USE_MKL
+    if (options.iterativeMklSpmv) {
+        throw std::invalid_argument("--iterative-spmv mkl requires a build with Intel oneMKL");
+    }
+#endif
+    if (options.pardisoOutOfCore) {
+#ifndef BPFEM_USE_MKL
+        throw std::invalid_argument("--pardiso-mode ooc requires a build with Intel oneMKL");
+#else
+        if (options.linearSolver != LinearSolverKind::Direct
+            && options.linearSolver != LinearSolverKind::Auto) {
+            throw std::invalid_argument("--pardiso-mode ooc requires --linear-solver direct or auto");
+        }
+#endif
+    }
     auto buildBiCGStab = [&]() -> std::unique_ptr<linalg::ISparseSolver> {
         auto backend = std::make_unique<linalg::BiCGStabBackend>();
-        if (auto precon = makePreconditioner(options.preconditioner); precon) {
+        backend->setMklSpmv(options.iterativeMklSpmv);
+        if (auto precon = makePreconditioner(options); precon) {
             backend->setPreconditioner(std::move(precon));
         }
         return backend;
@@ -46,8 +96,9 @@ std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) 
 
     auto buildGmres = [&]() -> std::unique_ptr<linalg::ISparseSolver> {
         auto backend = std::make_unique<linalg::GmresBackend>();
+        backend->setMklSpmv(options.iterativeMklSpmv);
         backend->setRestartLength(options.gmresRestart);
-        if (auto precon = makePreconditioner(options.preconditioner); precon) {
+        if (auto precon = makePreconditioner(options); precon) {
             backend->setPreconditioner(std::move(precon));
         }
         return backend;
@@ -56,16 +107,20 @@ std::unique_ptr<linalg::ISparseSolver> makeSparseSolver(const Options& options) 
     switch (options.linearSolver) {
         case LinearSolverKind::Direct:
             warnPreconIgnored(options.preconditioner, "PARDISO");
-            return std::make_unique<linalg::PardisoBackend>();
+            return std::make_unique<linalg::PardisoBackend>(options.pardisoOutOfCore);
         case LinearSolverKind::BiCGStab:
             return buildBiCGStab();
         case LinearSolverKind::Gmres:
             return buildGmres();
+        case LinearSolverKind::Mumps:
+            warnPreconIgnored(options.preconditioner, "MUMPS");
+            return std::make_unique<linalg::MumpsBackend>(
+                mumpsMode(options), options.mumpsBlrTolerance, options.outDir);
         case LinearSolverKind::Auto:
         default:
 #ifdef BPFEM_USE_MKL
             warnPreconIgnored(options.preconditioner, "PARDISO");
-            return std::make_unique<linalg::PardisoBackend>();
+            return std::make_unique<linalg::PardisoBackend>(options.pardisoOutOfCore);
 #else
             return buildBiCGStab();
 #endif

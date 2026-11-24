@@ -47,6 +47,8 @@ struct ProjectDefinition {
     SweepDefinition sweep;
     std::vector<PortDefinition> ports;
     std::string backgroundMaterial = "vacuum";
+    std::map<std::string, std::string> bodyMaterials;
+    std::vector<int> explicitPecFaces;
 };
 
 struct BodyInfo {
@@ -90,10 +92,21 @@ struct Mesh {
     std::unordered_map<int, std::size_t> pointIndex() const;
 };
 
+enum class SolveStatus {
+    Unchecked,
+    Converged,
+    IterationLimit,
+    Breakdown,
+    NonFinite,
+    ResidualTooLarge
+};
+
 struct SolveResult {
     std::vector<std::complex<double>> field;
     int iterations = 0;
     double residual = 0.0;
+    double absoluteResidual = 0.0;
+    SolveStatus status = SolveStatus::Unchecked;
 };
 
 struct SParameterPoint {

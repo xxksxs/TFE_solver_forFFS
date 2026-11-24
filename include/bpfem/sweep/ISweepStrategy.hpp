@@ -44,8 +44,7 @@ struct SweepContext {
     using ProgressSink = std::function<void(double frequencyHz,
                                             double assembleSec,
                                             double solveSec,
-                                            int iterations,
-                                            double residual)>;
+                                            const SolveResult& result)>;
     ProgressSink onFrequencyStat;
 
     // Linear-solver tolerance / iteration budget forwarded by Application.

@@ -13,6 +13,7 @@ public:
     using Complex = std::complex<double>;
     using SolveFunction = std::function<std::vector<Complex>(const std::vector<Complex>& rhs)>;
     using LinearOperator = std::function<std::vector<Complex>(const std::vector<Complex>& x)>;
+    using AcceptRightHandSide = std::function<bool(const std::vector<Complex>&)>;
     using RhsCoefficientFunction = std::function<std::vector<Complex>(std::size_t order)>;
 
     // 为一般多项式矩阵方程生成矩向量：
@@ -31,7 +32,8 @@ public:
         std::size_t momentCount,
         const RhsCoefficientFunction& rhsCoefficientAt,
         const std::vector<LinearOperator>& matrixCoefficientOperators,
-        const SolveFunction& solveAtExpansion);
+        const SolveFunction& solveAtExpansion,
+        const AcceptRightHandSide& accept = {});
 
     // 为一阶质量矩阵模型生成矩向量：
     //
