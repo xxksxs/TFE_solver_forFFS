@@ -29,6 +29,8 @@ struct FrequencyStat {
     double assembleSec = 0.0;
     double solveSec = 0.0;
     double residual = 0.0;
+    double absoluteResidual = 0.0;
+    std::string linearSolveStatus;
     int iterations = 0;
     double s11Db = 0.0;
     double s21Db = 0.0;
@@ -38,8 +40,8 @@ struct FrequencyStat {
 // `<outDir>/run.json` near the end. Kept hand-written (no third-party JSON
 // dep) -- the format is small enough.
 struct RunReport {
-    int schema = 1;
-    std::string status = "ok";  // overwritten to "fatal" on crash before write
+    int schema = 2;
+    std::string status = "fatal";
     std::string solverVersion;
     std::string buildString;
     std::string runtimeString;
@@ -51,6 +53,13 @@ struct RunReport {
     std::string workingDirectory;
     std::string sweepStrategyName;
     std::string linearSolverBackend;
+    std::string outputDirectory;
+    std::string aedtSha256;
+    std::string meshSha256;
+    std::string executableSha256;
+    int mklMaxThreads = 0;
+    int mklPardisoMaxThreads = 0;
+    std::string ompNumThreads;
 
     // Mirrors Options. Stringified to keep the JSON writer trivial; CI can
     // still grep / regex over these.
@@ -75,6 +84,7 @@ struct RunReport {
     std::uint64_t factorizedRhsSolveCount = 0;
     std::uint64_t factorizedSolveCallCount = 0;
     std::uint64_t batchRhsMax = 0;
+    std::uint64_t estimatedSolverPeakKiB = 0;
     double symbolicAnalysisSec = 0.0;
     double numericFactorizationSec = 0.0;
     double factorizedRhsSolveSec = 0.0;
@@ -83,6 +93,8 @@ struct RunReport {
 // Populate the report's environment / options sections from a captured
 // RunEnvironment plus the parsed Options. Does not touch phases / sweep.
 void fillReportFromEnvironment(RunReport& report, const RunEnvironment& env, const Options& options);
+void captureRunInputs(RunReport& report, const Options& options, const char* executable);
+void verifyRunInputs(const RunReport& report, const Options& options);
 
 // Write the report to disk. Returns true on success. Hand-rolled JSON; no
 // schema validation.

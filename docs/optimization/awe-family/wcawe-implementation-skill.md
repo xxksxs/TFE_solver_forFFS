@@ -272,7 +272,9 @@ struct WcaweAppendResult {
 
 每个成功阶只允许一次 A0 回代。P_U 三角回代是 q 维小系统，不得调用 PARDISO。
 
-## 9. 当前 P1 工程适配
+## 9. 历史 P1 工程适配
+
+本节及后文的 P1 基准描述旧工程接线。当前 CLI 的高阶接线与独立矩校验见[公式复现](paper-reproduction.md)。式 (7)–(9) 的索引、上三角乘积和构基约定仍适用。
 
 WcaweSweep::buildOffline 必须改为：
 
@@ -342,15 +344,17 @@ WcaweSweep::buildOffline 必须改为：
 - wcawe_termination_reason
 - wcawe_identity_limit_error（仅单测/诊断构建）
 
-basis_condition.csv 改为：
+basis_condition.csv 逐阶记录以下指标。
 
 - order
-- awe_moment_condition_proxy（仅诊断小样或流式代理，不得要求保存全部 AWE 矩）
-- wcawe_basis_orthogonality_error
+- orthogonality_error
 - u_diagonal_abs
 - u_diagonal_ratio
 - recurrence_residual
 - basis_relation_residual
+- triangular_solve_count
+
+U 的对角元比衡量校正递推中对角元模的跨度。复现论文的传统矩阵条件数曲线时，需用独立传统矩计算其条件数。
 
 旧字段 X≈VR 不能继续作为论文主验收项。
 

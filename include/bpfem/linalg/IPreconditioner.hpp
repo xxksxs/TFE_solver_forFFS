@@ -24,6 +24,7 @@ public:
     // diagonal for Jacobi; build an ILU factorization, etc). Called once per
     // solve. The reference must remain valid for subsequent apply() calls.
     virtual void setup(const SparseMatrix& A) = 0;
+    virtual void clear() noexcept {}
 
     // y = M^{-1} x. y is resized to x.size() if needed.
     virtual void apply(const std::vector<std::complex<double>>& x,

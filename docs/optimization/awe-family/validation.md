@@ -183,7 +183,7 @@ X≈VR 只能作为普通 QR 诊断，不能替代式 (7)、式 (8) 和矩匹配
 - `hfss_comparison.csv`：与 `wg_bp_filter_S_parameters.csv` 对齐后的外部基准误差。
 - `diagnostics.json`：算法参数、展开点、阶数、ROM 维度、retained/deflated 列数、Padé pivot ratio、WCAWE 式 (7) 递推残差、式 (8) 关系残差、U 对角、正交性、矩匹配、无源性和 reduced solve 状态。
 - `timing.json`：offline、basis、projection、online 的耗时。
-- `basis_condition.csv`：WCAWE 基条件数诊断；必须包含 AWE 矩基条件代理、WCAWE 正交基条件代理、U 对角元、递推残差、基关系残差和正交性误差。
+- `basis_condition.csv` 逐阶报告 WCAWE 的 U 对角元模及其最大/最小比、递推残差、基关系残差、正交性误差和三角回代次数。传统 AWE 矩阵的条件数需要从独立传统矩计算。
 - `benchmark_summary.csv`：`scripts/compare_with_hfss.py --batch-root` 生成的 direct/ALPS/AWE/GAWE/MGAWE/WCAWE 批量 HFSS 对比汇总。
 - `direct_comparison.csv`：direct 抽检频点上的幅度误差、相位误差和残差。
 

@@ -9,7 +9,7 @@
 | --- | --- |
 | `.gitignore` | 屏蔽 `build*/`、`result/`、IDE 元数据、LaTeX 中间文件、Python 缓存等 |
 | `.gitattributes` | 跨平台行尾稳定化（仓库存 LF，工作副本恢复平台原生 EOL）；`*.aedt`、`*.ngmesh`、`*.pdf`、`*.png`、`*.vtu` 标记为 binary |
-| `CHANGELOG.md` | 用户可见变化的版本日志，每次里程碑发版同步打 tag |
+| [版本日志](../history/CHANGELOG.md) | 用户可见变化的版本日志，每次里程碑发版同步打 tag |
 
 ## 提交粒度
 

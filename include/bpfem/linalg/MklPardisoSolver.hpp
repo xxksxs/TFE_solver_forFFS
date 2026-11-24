@@ -16,13 +16,14 @@ namespace fem {
 
 class MklPardisoSolver {
 public:
-    MklPardisoSolver();
+    explicit MklPardisoSolver(bool outOfCore = false);
     ~MklPardisoSolver();
 
     MklPardisoSolver(const MklPardisoSolver&) = delete;
     MklPardisoSolver& operator=(const MklPardisoSolver&) = delete;
 
-    SolveResult solve(const SparseMatrix& matrix, const std::vector<std::complex<double>>& rhs);
+    SolveResult solve(const SparseMatrix& matrix, const std::vector<std::complex<double>>& rhs,
+                      double tolerance = 1e-7);
     void factorize(const SparseMatrix& matrix);
     SolveResult solveFactorized(const std::vector<std::complex<double>>& rhs);
     std::vector<SolveResult> solveFactorizedBatch(
@@ -31,6 +32,7 @@ public:
     linalg::FactorizationStatistics factorizationStatistics() const { return statistics_; }
 
 private:
+    bool outOfCore_;
 #ifdef BPFEM_USE_MKL
     void initializeParameters();
     bool hasSamePattern(MKL_INT n, const std::vector<int>& rowOffsets, const std::vector<int>& columnIndices) const;

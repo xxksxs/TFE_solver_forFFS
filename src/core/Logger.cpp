@@ -103,14 +103,22 @@ Logger::~Logger() {
     }
 }
 
-void Logger::attachLogFile(const std::string& path) {
+bool Logger::attachLogFile(const std::filesystem::path& path) {
     file_ = std::make_unique<std::ofstream>(path, std::ios::out | std::ios::trunc);
     if (!file_->good()) {
         file_.reset();
-        info("Could not open log file: " + path);
-        return;
+        return false;
     }
-    info("Tee logging to file: " + path);
+    info("Tee logging to file: " + path.string());
+    return true;
+}
+
+bool Logger::closeLogFile() {
+    if (!file_) return false;
+    file_->close();
+    const bool success = !file_->fail();
+    file_.reset();
+    return success;
 }
 
 void Logger::banner() {

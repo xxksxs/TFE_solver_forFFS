@@ -8,6 +8,10 @@
 
 namespace fem::bc {
 
+double wavePortAdmittance(double k0Squared, double cutoffSquared) {
+    return std::sqrt(k0Squared > cutoffSquared ? k0Squared - cutoffSquared : k0Squared);
+}
+
 namespace {
 
 // Apply one analytic mode of a port: rank-1 update on `matrix` plus optional
@@ -31,8 +35,8 @@ void applyOneMode(SparseMatrix& matrix,
     const std::complex<double> incident = (excited && s > 0.0)
         ? std::polar(std::sqrt(std::max(magnitudeW, 0.0)) * s, phaseDeg * pi / 180.0)
         : std::complex<double>(0.0, 0.0);
-    const double beta = std::sqrt(std::max(0.0, k0 * k0 - portMode.cutoffWavenumberSquared));
-    const std::complex<double> admittance(0.0, beta > 0.0 ? beta : k0);
+    const std::complex<double> admittance(0.0,
+        wavePortAdmittance(k0 * k0, portMode.cutoffWavenumberSquared));
     for (std::size_t rowIndex = 0; rowIndex < mode.size(); ++rowIndex) {
         const auto& [row, rowValue] = mode[rowIndex];
         if (constrainedDofs.count(row) != 0) {

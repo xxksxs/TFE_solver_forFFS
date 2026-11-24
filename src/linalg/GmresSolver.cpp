@@ -1,4 +1,5 @@
 #include "bpfem/linalg/GmresSolver.hpp"
+#include "bpfem/linalg/SolveResidual.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,14 +18,6 @@ Complex hdot(const std::vector<Complex>& a, const std::vector<Complex>& b) {
         s += std::conj(a[i]) * b[i];
     }
     return s;
-}
-
-double norm2(const std::vector<Complex>& v) {
-    double s = 0.0;
-    for (const auto& z : v) {
-        s += std::norm(z);
-    }
-    return std::sqrt(s);
 }
 
 // Compute a Givens rotation that zeros y when applied to (x, y)^T:
@@ -46,7 +39,7 @@ void givens(Complex x, Complex y, double& c, Complex& s, Complex& r) {
         r = Complex(ay, 0.0);
         return;
     }
-    const double rho = std::sqrt(ax * ax + ay * ay);
+    const double rho = std::hypot(ax, ay);
     c = ax / rho;
     // s = (x / |x|) * conj(y) / rho
     s = (x / ax) * std::conj(y) / rho;
@@ -63,7 +56,30 @@ void applyGivens(double c, Complex s, Complex& a, Complex& b) {
 }  // namespace
 
 void GmresSolver::setPreconditioner(std::shared_ptr<linalg::IPreconditioner> precon) {
+    if (preparedMatrix_ != nullptr) {
+        throw std::logic_error("Cannot replace the preconditioner in a prepared solve");
+    }
     precon_ = std::move(precon);
+}
+
+void GmresSolver::beginMatrix(const SparseMatrix& matrix) {
+    if (preparedMatrix_ != nullptr) {
+        throw std::logic_error("Iterative solver already has a prepared matrix");
+    }
+    auto matrixOperator = std::make_unique<linalg::IterativeOperator>(matrix, useMklSpmv_);
+    if (precon_) {
+        precon_->setup(matrix);
+    }
+    preparedMatrix_ = &matrix;
+    preparedOperator_ = std::move(matrixOperator);
+}
+
+void GmresSolver::endMatrix() noexcept {
+    if (precon_) {
+        precon_->clear();
+    }
+    preparedOperator_.reset();
+    preparedMatrix_ = nullptr;
 }
 
 SolveResult GmresSolver::solve(const SparseMatrix& A,
@@ -71,12 +87,24 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
                                int maxIterations,
                                double tolerance) const {
     const std::size_t n = A.size();
-    const int m = restartLength_;
-
-    std::vector<Complex> x(n, Complex(0.0, 0.0));
+    linalg::validateIterativeInput(A, b, maxIterations, tolerance);
+    if (preparedMatrix_ != nullptr && preparedMatrix_ != &A) {
+        throw std::logic_error("GMRES solve does not match its prepared matrix");
+    }
+    const double normB = linalg::vectorNorm(b);
+    SolveResult result;
+    auto& x = result.field;
+    x.resize(n);
+    if (normB == 0.0 || !std::isfinite(normB)) {
+        linalg::checkResidual(A, b, tolerance, result);
+        return result;
+    }
+    const linalg::IterativeOperator singleSolveOperator(A, useMklSpmv_ && !preparedOperator_);
+    const auto& matrixOperator = preparedOperator_ ? *preparedOperator_ : singleSolveOperator;
+    const int m = std::min(restartLength_, maxIterations);
     std::vector<Complex> r(n);
 
-    if (precon_) {
+    if (precon_ && preparedMatrix_ == nullptr) {
         precon_->setup(A);
     }
 
@@ -89,36 +117,38 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
         return scratch;
     };
 
-    const double normB = std::max(norm2(b), 1.0e-30);
-
-    // Initial residual r0 = b - A x0 = b (x0 = 0).
-    r = b;
-    double residual = norm2(r) / normB;
-
     // Krylov basis V (m+1 columns, each length n) and Hessenberg matrix H
-    // (column-major (m+1) x m). Givens rotations stored as (c, s) per column.
+    // (row-major (m+1) x m). Givens rotations stored as (c, s) per column.
     std::vector<std::vector<Complex>> V;
-    V.reserve(static_cast<std::size_t>(m + 1));
-    std::vector<Complex> H(static_cast<std::size_t>((m + 1) * m), Complex(0.0, 0.0));
+    const auto basisSize = static_cast<std::size_t>(m) + 1;
+    V.resize(basisSize);
+    std::vector<Complex> H(basisSize * m, Complex(0.0, 0.0));
     std::vector<double> givensC(static_cast<std::size_t>(m), 0.0);
     std::vector<Complex> givensS(static_cast<std::size_t>(m), Complex(0.0, 0.0));
-    std::vector<Complex> g(static_cast<std::size_t>(m + 1), Complex(0.0, 0.0));
+    std::vector<Complex> g(basisSize, Complex(0.0, 0.0));
     std::vector<Complex> preconScratch(n, Complex(0.0, 0.0));
 
-    int iter = 0;
-    while (iter < maxIterations && residual > tolerance) {
+    int& iter = result.iterations;
+    auto finish = [&](SolveStatus failure) {
+        linalg::checkResidual(A, b, tolerance, result, failure);
+        return std::move(result);
+    };
+    while (iter < maxIterations) {
         // Restart: compute current residual.
         const auto Ax = A.multiply(x);
         for (std::size_t i = 0; i < n; ++i) {
             r[i] = b[i] - Ax[i];
         }
-        const double beta = norm2(r);
-        if (beta == 0.0) break;
-        residual = beta / normB;
-        if (residual <= tolerance) break;
+        const double beta = linalg::vectorNorm(r);
+        const double trueResidual = beta / normB;
+        if (!std::isfinite(trueResidual)) {
+            return finish(SolveStatus::NonFinite);
+        }
+        if (trueResidual <= tolerance) {
+            break;
+        }
 
-        V.clear();
-        V.emplace_back(n, Complex(0.0, 0.0));
+        V[0].resize(n);
         for (std::size_t i = 0; i < n; ++i) {
             V[0][i] = r[i] / beta;
         }
@@ -134,7 +164,7 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
 
             // w = A * M^{-1} v_j  (right preconditioning).
             const auto& vjPrec = applyPrecon(V[static_cast<std::size_t>(j)], preconScratch);
-            std::vector<Complex> w = A.multiply(vjPrec);
+            std::vector<Complex> w = matrixOperator.multiply(vjPrec);
 
             // Modified Gram-Schmidt with one pass of re-orthogonalization.
             // Both passes accumulate into H(i, j); the second pass refines
@@ -149,7 +179,10 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
                     }
                 }
             }
-            const double hnext = norm2(w);
+            const double hnext = linalg::vectorNorm(w);
+            if (!std::isfinite(hnext)) {
+                return finish(SolveStatus::NonFinite);
+            }
             H[static_cast<std::size_t>(j + 1) * static_cast<std::size_t>(m)
               + static_cast<std::size_t>(j)] = Complex(hnext, 0.0);
 
@@ -182,7 +215,7 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
             applyGivens(c, s, g[static_cast<std::size_t>(j)],
                         g[static_cast<std::size_t>(j + 1)]);
 
-            residual = std::abs(g[static_cast<std::size_t>(j + 1)]) / normB;
+            const double residual = std::abs(g[static_cast<std::size_t>(j + 1)]) / normB;
             kFinal = j;
 
             if (residual <= tolerance) {
@@ -193,11 +226,11 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
             if (hnext == 0.0) {
                 break;
             }
-            std::vector<Complex> next(n);
+            auto& next = V[static_cast<std::size_t>(j) + 1];
+            next.resize(n);
             for (std::size_t k = 0; k < n; ++k) {
                 next[k] = w[k] / hnext;
             }
-            V.push_back(std::move(next));
         }
 
         if (kFinal < 0) {
@@ -215,6 +248,12 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
             }
             const Complex diag = H[static_cast<std::size_t>(i) * static_cast<std::size_t>(m)
                                     + static_cast<std::size_t>(i)];
+            if (!std::isfinite(std::abs(diag))) {
+                return finish(SolveStatus::NonFinite);
+            }
+            if (diag == Complex{}) {
+                return finish(SolveStatus::Breakdown);
+            }
             y[static_cast<std::size_t>(i)] = sum / diag;
         }
 
@@ -231,7 +270,7 @@ SolveResult GmresSolver::solve(const SparseMatrix& A,
         }
     }
 
-    return SolveResult{x, iter, residual};
+    return finish(iter == maxIterations ? SolveStatus::IterationLimit : SolveStatus::Breakdown);
 }
 
 }  // namespace fem

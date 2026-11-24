@@ -1,5 +1,7 @@
 # 文档地图
 
+从[统一文档入口](../README.md)进入。修改项目时查看[修改规范](../development-workflow/change-policy.md)和[变更记录](../changes/README.md)。
+
 本文说明 `docs/` 下各专题目录的用途。
 
 ## 顶层入口
@@ -7,6 +9,7 @@
 - **`../overview.md`**：工程主入口和兼容入口。
 - **`../project-tree.md`**：项目树、目录职责、生成目录和数据流速览。
 - **`../../README.md`**：构建、运行和文档入口。
+- **`../engineering-reference.md`**：完整 CLI、输出约定、模块边界和自动化参考。
 
 ## 专题目录
 

@@ -1,3 +1,5 @@
+#include "bpfem/bc/WavePortBC.hpp"
+#include "bpfem/core/Constants.hpp"
 #include "bpfem/fastsweep/GalerkinReducedModel.hpp"
 #include "bpfem/fastsweep/LanczosPadeModel.hpp"
 #include "bpfem/fastsweep/LinearAlgebra.hpp"
@@ -13,10 +15,13 @@
 #include "bpfem/linalg/IFactorizedSparseSolver.hpp"
 #include "bpfem/linalg/MklPardisoSolver.hpp"
 #include "bpfem/linalg/SparseMatrix.hpp"
+#include "bpfem/sweep/MgaweSweep.hpp"
+#include "bpfem/sweep/WcaweSweep.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -319,6 +324,13 @@ void testPadeApproximant() {
                 "Pade denominator coefficient mismatch");
     requireNear(pade.evaluate(Complex(0.1, 0.0)), Complex(1.25, 0.0), 1.0e-14,
                 "Pade evaluation mismatch");
+
+    // [0/2] for 1/(1 - 2t + 3t²). The denominator's first row uses c[-1] = 0.
+    const auto subdiagonal = fem::fastsweep::PadeApproximant::build({1.0, 2.0, 1.0}, 0, 2);
+    requireNear(subdiagonal.denominator()[1], Complex(-2.0, 0.0), 1.0e-14,
+                "Subdiagonal Padé first coefficient mismatch");
+    requireNear(subdiagonal.denominator()[2], Complex(3.0, 0.0), 1.0e-14,
+                "Subdiagonal Padé second coefficient mismatch");
 }
 
 // 验证二阶双边 Lanczos 在完整二维空间中精确恢复传递函数和状态。
@@ -874,6 +886,185 @@ void testGalerkinReducedModel() {
             "Galerkin S21 is not finite");
     const auto field = model.reconstructField(1.0e9);
     require(field.size() == 2, "Galerkin reconstructed field size mismatch");
+
+    // A passive second port below cutoff still contributes the Direct j*k0 boundary term.
+    // A complex one-column basis makes V^T and V^H produce different answers.
+    const double f = 1.0e9;
+    const double k = 2.0 * fem::pi * f / fem::c0;
+    affine.portCutoffSquared[1] = 4.0 * k * k;
+    const Complex phase(0.0, 1.0);
+    const Complex expected = Complex(0.0, 2.0 * k)
+        * fem::powerNormalizationFactor(portModeSolver.solve(10), f);
+    // Choose K22=2 so the two j*k terms cancel and the projected matrix is -1.
+    affine.K.add(1, 1, 1.0);
+    model.build(project, affine, portModeSolver, {{1.0, phase}}, portVectors);
+    requireNear(model.solveReduced(f)[0], -expected, 1.0e-12,
+                "Galerkin transpose projection or cutoff admittance mismatch");
+
+    using Builder = fem::fastsweep::PolynomialPortMomentBuilder;
+    const auto series = Builder::buildTaylorSeries(project, portModeSolver, affine,
+        f, 4, Builder::Variable::WavenumberShift);
+    requireNear(series.admittance[1][0], k, 1.0e-14, "Cutoff port Taylor constant");
+    requireNear(series.admittance[1][1], k, 1.0e-14, "Cutoff port Taylor slope");
+    requireNear(series.admittance[1][2], 0.0, 1.0e-14, "Cutoff port Taylor curvature");
+    requireNear(model.solveReduced(f, &series)[0], -expected, 1.0e-12,
+                "Taylor ROM does not match the midpoint full-order projection");
+    const double t = 1.0e-3;
+    const auto x = model.solveReduced(f * (1.0 + t), &series)[0];
+    requireNear(x, -expected * (1.0 + t), 1.0e-11, "Taylor ROM off-center coefficients");
+
+    // With V=(1,i), the Hermitian port terms add, and the transpose terms cancel.
+    using Projection = fem::fastsweep::GalerkinReducedModel::Projection;
+    model.build(project, affine, portModeSolver, {{1.0, phase}}, portVectors, Projection::Hermitian);
+    const auto hermitianCoordinate = expected / Complex(3.0, 2.0 * k);
+    requireNear(model.solveReduced(f, &series)[0], hermitianCoordinate, 1.0e-12,
+                "2001 Galerkin test must use V^H");
+    const auto hermitianField = model.reconstructField(f, &series);
+    requireNear(hermitianField[1], phase * hermitianCoordinate, 1.0e-12,
+                "2001 reconstruction must use the original basis");
+
+    // Compare both operators on the same field with a deliberately perturbed Taylor RHS.
+    auto perturbed = series;
+    perturbed.excitation[0][0] *= 2.0;
+    const auto sample = fem::fastsweep::losslessResiduals(project, portModeSolver, affine,
+        f, hermitianField, &perturbed);
+    const auto applied0 = Complex(1.0, k) * hermitianField[0];
+    const auto applied1 = Complex(2.0, k) * hermitianField[1];
+    require(sample.trueRelative && sample.taylorRelative && !sample.zeroRhs && !sample.nearCutoff,
+            "Expected two normalized residuals on the active branch");
+    requireNear(*sample.trueRelative,
+                std::max(std::abs(expected - applied0), std::abs(applied1)) / std::abs(expected),
+                1.0e-13, "Exact operator residual");
+    requireNear(*sample.taylorRelative,
+                std::max(std::abs(2.0 * expected - applied0), std::abs(applied1)) / std::abs(2.0 * expected),
+                1.0e-13, "Independent Taylor operator residual");
+
+    const auto cutoff = fem::fastsweep::losslessResiduals(project, portModeSolver, affine,
+        2.0 * f, hermitianField, &series);
+    require(cutoff.nearCutoff && cutoff.trueRelative && !cutoff.taylorRelative,
+            "A retained passive cutoff must disable Taylor, while preserving exact residual");
+    project.ports[0].magnitudeW = 0.0;
+    const auto unexcited = fem::fastsweep::losslessResiduals(project, portModeSolver, affine,
+        f, std::vector<Complex>(2), &series);
+    require(unexcited.zeroRhs && !unexcited.trueRelative && unexcited.trueAbsolute == 0.0,
+            "Unexcited exact system must expose an undefined relative residual");
+}
+
+class DenseReferenceSolver final : public fem::linalg::ISparseSolver {
+public:
+    fem::SolveResult solve(const fem::SparseMatrix& matrix, const std::vector<Complex>& rhs,
+                           const fem::linalg::SolverConfig&) override {
+        const auto size = matrix.size();
+        std::vector<Complex> dense(size * size);
+        for (std::size_t col = 0; col < size; ++col) {
+            std::vector<Complex> unitVector(size);
+            unitVector[col] = 1.0;
+            const auto column = matrix.multiply(unitVector);
+            for (std::size_t row = 0; row < size; ++row) {
+                dense[row * size + col] = column[row];
+            }
+        }
+        auto field = rhs;
+        require(fem::fastsweep::denseSolve(dense, field, static_cast<int>(size)),
+                "Dense reference full system is singular");
+        return {std::move(field), 1};
+    }
+
+    const char* name() const override { return "dense-reference"; }
+};
+
+fem::Mesh makeWavePortTestMesh() {
+    fem::Mesh mesh;
+    mesh.pointsById = {{1, {}}, {2, {0.01, 0, 0}}, {3, {0, 0.01, 0}}, {4, {0, 0, 0.01}}};
+    mesh.tetrahedra.push_back({1, 1, {1, 2, 3, 4}});
+    return mesh;
+}
+
+void testMgaweDeflationIsRelativeToMomentNorm() {
+    DenseReferenceSolver solver;
+    const auto mesh = makeWavePortTestMesh();
+    fem::EdgeTopology topology(mesh, 0);
+    fem::PortModeSolver modes(mesh, topology);
+    modes.setPrecomputed(10, makePortMode(10, topology.edgeZeroDofForNodes(1, 2)));
+    modes.setPrecomputed(20, makePortMode(20, topology.edgeZeroDofForNodes(1, 3)));
+
+    const auto run = [&](double power) {
+        fem::ProjectDefinition project;
+        project.ports = {{1, 10, 1, true, power, 0.0}, {2, 20, 1, false, 0.0, 0.0}};
+        fem::FEMAssembler assembler(mesh, project, topology, modes);
+        assembler.setBoundaryConditions({std::make_shared<fem::bc::WavePortBC>()});
+        fem::sweep::MgaweOptions options;
+        options.localOrder = 3;
+        options.polynomialProjection = true;
+        fem::sweep::MgaweSweep sweep(project, assembler, modes, options);
+        const int dimension = sweep.buildOffline({1.0e9}, solver, {});
+        return std::pair{dimension, sweep.evaluate(1.01e9)};
+    };
+
+    const auto [dimension, response] = run(1.0);
+    const auto [weakDimension, weakResponse] = run(1.0e-30);
+    require(dimension > 1 && dimension == weakDimension,
+            "MGAWE basis dimension changed with incident power");
+    requireNear(weakResponse.s11, response.s11, 1.0e-10, "MGAWE S11 changed with power scale");
+    requireNear(weakResponse.s21, response.s21, 1.0e-10, "MGAWE S21 changed with power scale");
+}
+
+void testWcaweLowOrderProjection() {
+    constexpr double expansionHz = 1.0e9;
+    constexpr double evaluationHz = 1.12e9;
+    DenseReferenceSolver solver;
+    const auto mesh = makeWavePortTestMesh();
+    const fem::EdgeTopology topology(mesh, 0);
+    const fem::PortModeSolver modes(mesh, topology);
+    modes.setPrecomputed(10, makePortMode(10, topology.edgeZeroDofForNodes(1, 2)));
+    modes.setPrecomputed(20, makePortMode(20, topology.edgeZeroDofForNodes(1, 3)));
+    fem::ProjectDefinition project;
+    project.ports = {{1, 10, 1, true, 1.0, 0.0}, {2, 20, 1, false, 0.0, 0.0}};
+    fem::FEMAssembler assembler(mesh, project, topology, modes);
+    assembler.setBoundaryConditions({std::make_shared<fem::bc::WavePortBC>()});
+
+    std::vector<Complex> expansionRhs;
+    const auto expansionMatrix = assembler.assemble(expansionHz, expansionRhs);
+    const auto expansionField = solver.solve(expansionMatrix, expansionRhs, {}).field;
+    std::vector<Complex> evaluationRhs;
+    const auto evaluationMatrix = assembler.assemble(evaluationHz, evaluationRhs);
+    // With zero port cutoff, the exact full system is quadratic in frequency.
+    const Complex expectedScale = fem::fastsweep::bilinear(expansionField, evaluationRhs)
+        / fem::fastsweep::bilinear(expansionField, evaluationMatrix.multiply(expansionField));
+
+    for (const int order : {1, 2}) {
+        fem::sweep::WcaweOptions wcaweOptions;
+        wcaweOptions.order = order;
+        fem::sweep::WcaweSweep wcawe(project, assembler, modes, wcaweOptions);
+        require(wcawe.buildOffline(expansionHz, solver, {}) == order,
+                "Low-order WCAWE did not reach its target dimension");
+        const auto wcaweField = wcawe.reconstructField(evaluationHz);
+
+        fem::sweep::MgaweOptions mgaweOptions;
+        mgaweOptions.localOrder = order;
+        mgaweOptions.polynomialProjection = true;
+        fem::sweep::MgaweSweep mgawe(project, assembler, modes, mgaweOptions);
+        require(mgawe.buildOffline({expansionHz}, solver, {}) == order,
+                "Single-point MGAWE did not reach its target dimension");
+        const auto mgaweField = mgawe.reconstructField(evaluationHz);
+
+        auto difference = wcaweField;
+        for (std::size_t dof = 0; dof < difference.size(); ++dof) {
+            difference[dof] -= mgaweField[dof];
+        }
+        require(fem::fastsweep::norm2(difference) < 1.0e-10 * fem::fastsweep::norm2(mgaweField),
+                "Matched single-point WCAWE and MGAWE fields differ");
+
+        if (order == 1) {
+            difference = wcaweField;
+            for (std::size_t dof = 0; dof < difference.size(); ++dof) {
+                difference[dof] -= expectedScale * expansionField[dof];
+            }
+            require(fem::fastsweep::norm2(difference)
+                        < 1.0e-10 * std::abs(expectedScale) * fem::fastsweep::norm2(expansionField),
+                    "One-vector WCAWE failed the exact quadratic Galerkin projection");
+        }
+    }
 }
 
 }  // namespace
@@ -895,5 +1086,7 @@ int main() {
     testWcaweRejectsNaiveNormalizedRecurrence();
     testWcaweBreakdownStopsRecurrence();
     testGalerkinReducedModel();
+    testMgaweDeflationIsRelativeToMomentNorm();
+    testWcaweLowOrderProjection();
     return 0;
 }

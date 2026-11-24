@@ -1,15 +1,170 @@
 #include "bpfem/fastsweep/GalerkinReducedModel.hpp"
 
 #include "bpfem/core/Constants.hpp"
+#include "bpfem/bc/WavePortBC.hpp"
 #include "bpfem/fastsweep/LinearAlgebra.hpp"
 #include "bpfem/fastsweep/PortModeUtilities.hpp"
+#include "bpfem/post/ResultExtractor.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 
 namespace fem::fastsweep {
+
+namespace {
+template<class Scalar>
+Scalar evaluateSeries(const std::vector<Scalar>& coefficients, double coordinate) {
+    Scalar result{};
+    for (auto it = coefficients.rbegin(); it != coefficients.rend(); ++it) {
+        result = result * coordinate + *it;
+    }
+    return result;
+}
+
+using Complex = std::complex<double>;
+using PortTaylorSeries = PolynomialPortMomentBuilder::PortTaylorSeries;
+
+struct Coefficients {
+    double mass = 0.0;
+    std::vector<double> admittance;
+    std::vector<Complex> excitation;
+};
+
+
+Coefficients coefficientsAt(const ProjectDefinition& project, const PortModeSolver& modes,
+    const FEMAssembler::AffineSystem& affine, double frequencyHz, const PortTaylorSeries* series) {
+    const double k0 = 2.0 * pi * frequencyHz / c0;
+    const double k0Sq = k0 * k0;
+    const double coordinate = series ? series->coordinate(frequencyHz) : 0.0;
+    Coefficients coefficients;
+    coefficients.mass = series ? evaluateSeries(series->lambda, coordinate) : k0Sq;
+    const auto portCount = affine.portCoupling.size();
+    coefficients.admittance.resize(portCount);
+    coefficients.excitation.resize(portCount);
+    for (std::size_t v = 0; v < portCount; ++v) {
+        const auto index = static_cast<std::size_t>(v);
+        if (series) {
+            coefficients.admittance[index] = evaluateSeries(series->admittance[index], coordinate);
+            coefficients.excitation[index] = evaluateSeries(series->excitation[index], coordinate);
+            continue;
+        }
+        const double cutoff = affine.portCutoffSquared[index];
+        const double beta = bc::wavePortAdmittance(k0Sq, cutoff);
+        coefficients.admittance[index] = beta;
+        if (k0Sq > cutoff && affine.isExcitationMode[index]) {
+            const auto& mode = virtualPortMode(modes, affine, static_cast<int>(v));
+            const auto& port = project.ports[static_cast<std::size_t>(affine.projectPortIndex[index])];
+            const double amplitude = std::sqrt(std::max(port.magnitudeW, 0.0))
+                * powerNormalizationFactor(mode, frequencyHz);
+            coefficients.excitation[index] = Complex(0.0, 2.0 * beta)
+                * std::polar(amplitude, port.phaseDeg * pi / 180.0);
+        }
+    }
+    return coefficients;
+}
+
+struct ResidualNorms {
+    double absolute = 0.0;
+    double rhs = 0.0;
+};
+
+std::vector<Complex> assembleRhs(const FEMAssembler::AffineSystem& affine,
+                                 const Coefficients& coefficients) {
+    std::vector<Complex> rhs(affine.K.size());
+    for (std::size_t port = 0; port < affine.portCoupling.size(); ++port) {
+        if (coefficients.excitation[port] == Complex{}) continue;
+        for (const auto& [dof, weight] : affine.portCoupling[port]) {
+            rhs[static_cast<std::size_t>(dof)] += coefficients.excitation[port] * weight;
+        }
+    }
+    return rhs;
+}
+
+ResidualNorms residualNorms(const FEMAssembler::AffineSystem& affine,
+                            const std::vector<Complex>& field,
+                            const std::vector<Complex>& stiffness,
+                            const std::vector<Complex>& mass,
+                            const Coefficients& coefficients) {
+    auto applied = stiffness;
+    for (std::size_t i = 0; i < field.size(); ++i) applied[i] -= coefficients.mass * mass[i];
+    for (int dof : affine.constrainedDofs) {
+        const auto index = static_cast<std::size_t>(dof);
+        applied[index] = field[index];
+    }
+    for (std::size_t port = 0; port < affine.portCoupling.size(); ++port) {
+        Complex projection{};
+        for (const auto& [dof, weight] : affine.portCoupling[port]) {
+            projection += weight * field[static_cast<std::size_t>(dof)];
+        }
+        const Complex scale = Complex(0.0, coefficients.admittance[port]) * projection;
+        for (const auto& [dof, weight] : affine.portCoupling[port]) {
+            applied[static_cast<std::size_t>(dof)] += scale * weight;
+        }
+    }
+    const auto rhs = assembleRhs(affine, coefficients);
+    ResidualNorms norms;
+    for (std::size_t i = 0; i < field.size(); ++i) {
+        const double defect = std::abs(rhs[i] - applied[i]);
+        const double amplitude = std::abs(rhs[i]);
+        if (!std::isfinite(defect) || !std::isfinite(amplitude)) {
+            return {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+        }
+        norms.absolute = std::max(norms.absolute, defect);
+        norms.rhs = std::max(norms.rhs, amplitude);
+    }
+    return norms;
+}
+
+}  // namespace
+
+bool nearPortCutoff(const FEMAssembler::AffineSystem& affine, double frequencyHz) {
+    const double k = 2.0 * pi * frequencyHz / c0;
+    const double lambda = k * k;
+    constexpr double relativeMargin = 1.0e-8;
+    return std::any_of(affine.portCutoffSquared.begin(), affine.portCutoffSquared.end(),
+        [lambda](double cutoff) {
+            return std::abs(lambda - cutoff) <= relativeMargin * std::max(lambda, cutoff);
+        });
+}
+
+bool hasLosslessExcitation(const ProjectDefinition& project, const PortModeSolver& modes,
+                           const FEMAssembler::AffineSystem& affine, double frequencyHz) {
+    const auto rhs = assembleRhs(affine, coefficientsAt(project, modes, affine, frequencyHz, nullptr));
+    return std::any_of(rhs.begin(), rhs.end(), [](Complex value) { return value != Complex{}; });
+}
+
+SweepResidualSample losslessResiduals(
+    const ProjectDefinition& project, const PortModeSolver& modes,
+    const FEMAssembler::AffineSystem& affine, double frequencyHz,
+    const std::vector<Complex>& field, const PortTaylorSeries* series) {
+    SweepResidualSample sample;
+    sample.frequencyHz = frequencyHz;
+    sample.nearCutoff = nearPortCutoff(affine, frequencyHz);
+    const auto stiffness = affine.K.multiply(field);
+    const auto mass = affine.M.multiply(field);
+    const auto exact = coefficientsAt(project, modes, affine, frequencyHz, nullptr);
+    const auto trueNorms = residualNorms(affine, field, stiffness, mass, exact);
+    sample.zeroRhs = trueNorms.rhs == 0.0;
+    if (std::isfinite(trueNorms.absolute)) {
+        sample.trueAbsolute = trueNorms.absolute;
+        if (!sample.zeroRhs) sample.trueRelative = trueNorms.absolute / trueNorms.rhs;
+    }
+    const bool sameBranch = series && std::all_of(affine.portCutoffSquared.begin(),
+        affine.portCutoffSquared.end(), [&](double cutoff) {
+            return (exact.mass > cutoff) == (series->lambda0 > cutoff);
+        });
+    if (sameBranch && !sample.nearCutoff) {
+        const auto taylor = coefficientsAt(project, modes, affine, frequencyHz, series);
+        const auto norms = residualNorms(affine, field, stiffness, mass, taylor);
+        if (norms.rhs > 0.0 && std::isfinite(norms.absolute)) {
+            sample.taylorRelative = norms.absolute / norms.rhs;
+        }
+    }
+    return sample;
+}
 
 // 用给定正交基构造 Galerkin ROM：投影 K/M 矩阵并预投影端口向量。
 void GalerkinReducedModel::build(
@@ -17,10 +172,14 @@ void GalerkinReducedModel::build(
     const FEMAssembler::AffineSystem& affine,
     const PortModeSolver& portModeSolver,
     std::vector<std::vector<Complex>> basis,
-    const std::vector<std::vector<Complex>>& portVectors) {
+    const std::vector<std::vector<Complex>>& portVectors,
+    Projection projection) {
     if (basis.empty()) {
         throw std::runtime_error("GalerkinReducedModel: basis is empty");
     }
+    lastSolveSucceeded_ = true;
+    projection_ = projection;
+    const auto testProduct = projection == Projection::Hermitian ? hdot : bilinear;
     project_ = &project;
     affine_ = &affine;
     portModeSolver_ = &portModeSolver;
@@ -40,15 +199,20 @@ void GalerkinReducedModel::build(
                    Complex(0.0, 0.0));
 
     for (int j = 0; j < romDim_; ++j) {
-        const auto Kvj = affine.K.multiply(basis_[static_cast<std::size_t>(j)]);
-        const auto Mvj = affine.M.multiply(basis_[static_cast<std::size_t>(j)]);
+        const auto& column = basis_[static_cast<std::size_t>(j)];
+        auto Kvj = affine.K.multiply(column);
+        for (int dof : affine.constrainedDofs) {
+            const auto index = static_cast<std::size_t>(dof);
+            Kvj[index] = column[index];
+        }
+        const auto Mvj = affine.M.multiply(column);
         for (int i = 0; i < romDim_; ++i) {
             Ktilde_[static_cast<std::size_t>(i) * static_cast<std::size_t>(romDim_)
                     + static_cast<std::size_t>(j)] =
-                bilinear(basis_[static_cast<std::size_t>(i)], Kvj);
+                testProduct(basis_[static_cast<std::size_t>(i)], Kvj);
             Mtilde_[static_cast<std::size_t>(i) * static_cast<std::size_t>(romDim_)
                     + static_cast<std::size_t>(j)] =
-                bilinear(basis_[static_cast<std::size_t>(i)], Mvj);
+                testProduct(basis_[static_cast<std::size_t>(i)], Mvj);
         }
     }
 
@@ -68,49 +232,26 @@ void GalerkinReducedModel::build(
 
 // 在 ROM 空间组装指定频率的小型端口边界系统，并求解 reduced 坐标。
 std::vector<GalerkinReducedModel::Complex>
-GalerkinReducedModel::solveReduced(double frequencyHz) const {
+GalerkinReducedModel::solveReduced(double frequencyHz, const PortTaylorSeries* series) const {
     if (!ready_ || project_ == nullptr || affine_ == nullptr || portModeSolver_ == nullptr) {
         throw std::runtime_error("GalerkinReducedModel::solveReduced called before build");
     }
 
-    const double k0 = 2.0 * pi * frequencyHz / c0;
-    const double k0Sq = k0 * k0;
-    std::vector<double> beta(static_cast<std::size_t>(numVirtualPorts_), 0.0);
-    std::vector<Complex> incident(static_cast<std::size_t>(numVirtualPorts_), Complex(0.0, 0.0));
-
-    for (int v = 0; v < numVirtualPorts_; ++v) {
-        const double kc2 = affine_->portCutoffSquared[static_cast<std::size_t>(v)];
-        const double betaSq = k0Sq - kc2;
-        beta[static_cast<std::size_t>(v)] = (betaSq > 0.0) ? std::sqrt(betaSq) : 0.0;
-
-        if (affine_->isExcitationMode[static_cast<std::size_t>(v)]) {
-            const PortMode& pm = virtualPortMode(*portModeSolver_, *affine_, v);
-            const double s = powerNormalizationFactor(pm, frequencyHz);
-            if (s > 0.0) {
-                const auto& port = project_->ports[static_cast<std::size_t>(
-                    affine_->projectPortIndex[static_cast<std::size_t>(v)])];
-                incident[static_cast<std::size_t>(v)] = std::polar(
-                    std::sqrt(std::max(port.magnitudeW, 0.0)) * s,
-                    port.phaseDeg * pi / 180.0);
-            }
-        }
-    }
-
+    const auto coefficients = coefficientsAt(*project_, *portModeSolver_, *affine_, frequencyHz, series);
     const int q = romDim_;
     std::vector<Complex> Atilde(static_cast<std::size_t>(q) * static_cast<std::size_t>(q),
                                 Complex(0.0, 0.0));
     for (std::size_t k = 0; k < Atilde.size(); ++k) {
-        Atilde[k] = Ktilde_[k] - k0Sq * Mtilde_[k];
+        Atilde[k] = Ktilde_[k] - coefficients.mass * Mtilde_[k];
     }
     for (int v = 0; v < numVirtualPorts_; ++v) {
-        const double bv = beta[static_cast<std::size_t>(v)];
-        if (bv <= 0.0) {
-            continue;
-        }
-        const Complex jbeta(0.0, bv);
+        const Complex jbeta(0.0, coefficients.admittance[static_cast<std::size_t>(v)]);
         const auto& vp = portModeReduced_[static_cast<std::size_t>(v)];
         for (int i = 0; i < q; ++i) {
-            const Complex jbVi = jbeta * vp[static_cast<std::size_t>(i)];
+            const Complex right = vp[static_cast<std::size_t>(i)];
+            // The coupling vectors are real, so V^H p = conj(p^T V).
+            const Complex left = projection_ == Projection::Hermitian ? std::conj(right) : right;
+            const Complex jbVi = jbeta * left;
             for (int j = 0; j < q; ++j) {
                 Atilde[static_cast<std::size_t>(i) * static_cast<std::size_t>(q)
                        + static_cast<std::size_t>(j)] +=
@@ -121,14 +262,12 @@ GalerkinReducedModel::solveReduced(double frequencyHz) const {
 
     std::vector<Complex> rhs(static_cast<std::size_t>(q), Complex(0.0, 0.0));
     for (int v = 0; v < numVirtualPorts_; ++v) {
-        const double bv = beta[static_cast<std::size_t>(v)];
-        if (bv <= 0.0 || incident[static_cast<std::size_t>(v)] == Complex(0.0, 0.0)) {
-            continue;
-        }
-        const Complex factor = Complex(0.0, 2.0) * bv * incident[static_cast<std::size_t>(v)];
+        const Complex factor = coefficients.excitation[static_cast<std::size_t>(v)];
         const auto& vp = portModeReduced_[static_cast<std::size_t>(v)];
         for (int i = 0; i < q; ++i) {
-            rhs[static_cast<std::size_t>(i)] += factor * vp[static_cast<std::size_t>(i)];
+            const Complex right = vp[static_cast<std::size_t>(i)];
+            const Complex left = projection_ == Projection::Hermitian ? std::conj(right) : right;
+            rhs[static_cast<std::size_t>(i)] += factor * left;
         }
     }
 
@@ -143,7 +282,7 @@ GalerkinReducedModel::solveReduced(double frequencyHz) const {
 }
 
 // 在指定频率求解 ROM 后，从主导输入/输出端口投影中提取 S11 和 S21。
-SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz) const {
+SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz, const PortTaylorSeries* series) const {
     SParameterPoint sp;
     sp.frequencyHz = frequencyHz;
     if (!ready_ || numProjectPorts_ < 2 || affine_ == nullptr || project_ == nullptr
@@ -151,22 +290,14 @@ SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz) const {
         return sp;
     }
 
-    const auto xTilde = solveReduced(frequencyHz);
-    std::vector<double> sNorm(static_cast<std::size_t>(numVirtualPorts_), 0.0);
-    for (int v = 0; v < numVirtualPorts_; ++v) {
-        const PortMode& pm = virtualPortMode(*portModeSolver_, *affine_, v);
-        sNorm[static_cast<std::size_t>(v)] = powerNormalizationFactor(pm, frequencyHz);
-    }
+    const auto xTilde = solveReduced(frequencyHz, series);
     const auto dominant = dominantVirtualPortsByProject(*portModeSolver_, *affine_,
                                                         numProjectPorts_);
 
     auto portProjection = [&](int virtualIdx) {
+        if (virtualIdx < 0) return Complex{};
         const auto& vp = portModeReduced_[static_cast<std::size_t>(virtualIdx)];
-        Complex sum(0.0, 0.0);
-        for (int i = 0; i < romDim_; ++i) {
-            sum += vp[static_cast<std::size_t>(i)] * xTilde[static_cast<std::size_t>(i)];
-        }
-        return sum;
+        return bilinear(vp, xTilde);
     };
 
     const int vIn = dominant[0];
@@ -174,33 +305,14 @@ SParameterPoint GalerkinReducedModel::evaluate(double frequencyHz) const {
     if (vIn < 0) {
         return sp;
     }
-    const double sIn = sNorm[static_cast<std::size_t>(vIn)];
-    const double sOut = (vOut >= 0) ? sNorm[static_cast<std::size_t>(vOut)] : 0.0;
-    if (sIn <= 0.0) {
-        return sp;
-    }
-
-    const Complex bIn = portProjection(vIn) / sIn;
-    const Complex bOut = (vOut >= 0 && sOut > 0.0)
-        ? portProjection(vOut) / sOut
-        : Complex(0.0, 0.0);
-    const auto& port0 = project_->ports[0];
-    const Complex incidentExtract = port0.excited
-        ? std::polar(std::sqrt(std::max(port0.magnitudeW, 0.0)),
-                     port0.phaseDeg * pi / 180.0)
-        : Complex(1.0, 0.0);
-    if (incidentExtract == Complex(0.0, 0.0)) {
-        return sp;
-    }
-    sp.s11 = (bIn - incidentExtract) / incidentExtract;
-    sp.s21 = bOut / incidentExtract;
-    return sp;
+    return ResultExtractor(*project_, *portModeSolver_).extractFromPortProjections(
+        frequencyHz, portProjection(vIn), portProjection(vOut));
 }
 
 // 将 reduced 坐标按基向量线性组合回全阶场，用于 VTU 场文件输出。
 std::vector<GalerkinReducedModel::Complex>
-GalerkinReducedModel::reconstructField(double frequencyHz) const {
-    const auto xTilde = solveReduced(frequencyHz);
+GalerkinReducedModel::reconstructField(double frequencyHz, const PortTaylorSeries* series) const {
+    const auto xTilde = solveReduced(frequencyHz, series);
     std::vector<Complex> field(static_cast<std::size_t>(fullDim_), Complex(0.0, 0.0));
     for (int j = 0; j < romDim_; ++j) {
         const auto& v = basis_[static_cast<std::size_t>(j)];
@@ -210,6 +322,14 @@ GalerkinReducedModel::reconstructField(double frequencyHz) const {
         }
     }
     return field;
+}
+
+double GalerkinReducedModel::relativeResidual(double frequencyHz, const PortTaylorSeries* series) const {
+    const auto x = reconstructField(frequencyHz, series);
+    const auto coefficients = coefficientsAt(*project_, *portModeSolver_, *affine_, frequencyHz, series);
+    const auto norms = residualNorms(*affine_, x, affine_->K.multiply(x),
+                                     affine_->M.multiply(x), coefficients);
+    return norms.absolute / std::max(norms.rhs, 1.0e-300);
 }
 
 // 返回当前 ROM 基的最大正交性误差。

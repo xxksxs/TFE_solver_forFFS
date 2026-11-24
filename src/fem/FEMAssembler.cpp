@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <map>
 
 namespace fem {
 
@@ -347,9 +348,19 @@ SparseMatrix FEMAssembler::assembleVolumePiece(const std::shared_ptr<const Spars
 Material FEMAssembler::materialForBody(int bodyId) const {
     auto bit = mesh_.bodies.find(bodyId);
     if (bit != mesh_.bodies.end()) {
-        auto mit = project_.materials.find(bit->second.name);
+        const auto assignment = project_.bodyMaterials.find(bit->second.name);
+        const auto& materialName = assignment != project_.bodyMaterials.end()
+            ? assignment->second : bit->second.name;
+        auto mit = project_.materials.find(materialName);
         if (mit != project_.materials.end()) {
             return mit->second;
+        }
+        if (assignment != project_.bodyMaterials.end() && materialName != "vacuum") {
+            throw std::runtime_error("AEDT material '" + materialName
+                                     + "' is missing for mesh body '" + bit->second.name + "'");
+        }
+        if (assignment != project_.bodyMaterials.end()) {
+            return Material{"vacuum", 1.0, 1.0, 0.0};
         }
     }
     auto mit = project_.materials.find(project_.backgroundMaterial);
@@ -394,11 +405,41 @@ std::unordered_set<int> FEMAssembler::collectPecConstrainedDofs() const {
     for (const auto& port : project_.ports) {
         portFaces.insert(port.faceId);
     }
-    for (const auto& [faceId, bodyEdges] : collectSurfaceEdgesByFace()) {
-        if (portFaces.count(faceId) != 0) {
-            continue;
+    const std::unordered_set<int> explicitPec(project_.explicitPecFaces.begin(), project_.explicitPecFaces.end());
+    using Triangle = std::array<int, 3>;
+    // NGMesh also lists interfaces shared by two meshed dielectric bodies.
+    // Only an explicit Perfect E assignment makes an interior face a wall.
+    struct BoundaryFace {
+        unsigned adjacentTets = 0;
+        bool pec = false;
+    };
+    std::map<Triangle, BoundaryFace> faces;
+    for (const auto& triangle : mesh_.surfaceTriangles) {
+        const auto facet = mesh_.facets.find(triangle.facetId);
+        if (facet == mesh_.facets.end() || portFaces.count(facet->second.faceId)) continue;
+        auto key = triangle.vertexIds;
+        std::sort(key.begin(), key.end());
+        auto& face = faces[key];
+        face.pec = face.pec || explicitPec.count(facet->second.faceId);
+    }
+    for (const auto& tet : mesh_.tetrahedra) {
+        for (const auto& local : EdgeTopology::localFaces) {
+            Triangle key{tet.vertexIds[local[0]], tet.vertexIds[local[1]], tet.vertexIds[local[2]]};
+            std::sort(key.begin(), key.end());
+            const auto entry = faces.find(key);
+            if (entry != faces.end()) ++entry->second.adjacentTets;
         }
-        constrainedEdges.insert(bodyEdges.begin(), bodyEdges.end());
+    }
+    for (const auto& [nodes, face] : faces) {
+        if (face.adjacentTets != 1 && !face.pec) continue;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const auto [edge, higher] = topology_.edgeDofsForNodes(nodes[i], nodes[(i + 1) % nodes.size()]);
+            if (edge >= 0) constrainedEdges.insert(edge);
+            if (higher >= 0) constrainedEdges.insert(higher);
+        }
+        for (const int dof : topology_.faceFirstDofsForNodes(nodes[0], nodes[1], nodes[2])) {
+            if (dof >= 0) constrainedEdges.insert(dof);
+        }
     }
     return constrainedEdges;
 }
@@ -474,23 +515,6 @@ std::shared_ptr<const SparsePattern> FEMAssembler::sparsityPattern(const std::un
     sparsityPattern_ = SparseMatrix::createPattern(n, columnsByRow);
     sparsityPatternConstrainedDofs_ = constrainedDofs;
     return sparsityPattern_;
-}
-
-std::map<int, std::unordered_set<int>> FEMAssembler::collectSurfaceEdgesByFace() const {
-    std::map<int, std::unordered_set<int>> byFace;
-    for (const auto& port : project_.ports) {
-        byFace[port.faceId] = topology_.edgesOnFace(port.faceId);
-    }
-    for (const auto& tri : mesh_.surfaceTriangles) {
-        const auto fit = mesh_.facets.find(tri.facetId);
-        if (fit == mesh_.facets.end()) {
-            continue;
-        }
-        const int faceId = fit->second.faceId;
-        const auto faceEdges = topology_.edgesOnFace(faceId);
-        byFace[faceId].insert(faceEdges.begin(), faceEdges.end());
-    }
-    return byFace;
 }
 
 }  // namespace fem

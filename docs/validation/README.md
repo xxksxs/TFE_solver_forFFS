@@ -23,3 +23,4 @@
 - **`material-units.md`**：材料和单位一致性。
 - **`failure-signatures.md`**：常见失败现象和优先排查方向。
 - **`validation-workflow.md`**：物理修改后的推荐验证流程。
+- IOStructure 两套网格的复数误差核查和本机归档入口见 [MGAWE 与 WCAWE 审查及验证](../changes/2026-11-20-mgawe-wcawe-audit.md)。

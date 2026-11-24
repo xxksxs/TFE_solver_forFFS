@@ -4,19 +4,38 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace fem::fastsweep {
 
+struct SweepResidualSample {
+    double frequencyHz = 0.0;
+    std::optional<double> trueRelative;
+    std::optional<double> trueAbsolute;
+    std::optional<double> taylorRelative;
+    bool zeroRhs = false;
+    bool nearCutoff = false;
+};
+
 struct FastSweepDiagnostics {
     std::string algorithm;
     std::vector<double> expansionFrequenciesHz;
+    std::string model;
+    std::vector<int> localOrders;
+    std::string stoppingReason;
+    double maximumRelativeResidual = -1.0;
+    std::optional<double> trueResidualTolerance;
+    std::vector<SweepResidualSample> residualSamples;
+    std::vector<double> unmetFrequenciesHz;
+    double fullMomentProjectionError = -1.0;
     int requestedOrder = 0;
     int romDimension = 0;
     int retainedColumns = 0;
     int deflatedColumns = 0;
     double basisOrthogonalityError = 0.0;
+    double padeCoefficientMatchingError = 0.0;
     double padeInputPivotRatio = 0.0;
     double padeOutputPivotRatio = 0.0;
     // 兼容旧结果读取器；WCAWE v2 中该字段等于 basis relation residual。
@@ -51,7 +70,7 @@ struct FastSweepDiagnostics {
     double maxPassivityError = 0.0;
 };
 
-// 计算一组 S 参数点的最大无源性偏差。
+// Return positive excess of the reported outgoing power over incident power.
 double maxPassivityError(const std::vector<SParameterPoint>& points);
 
 // 将 fast-sweep 诊断结构写成 JSON 文件。

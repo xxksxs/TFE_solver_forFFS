@@ -7,7 +7,6 @@
 #include "bpfem/linalg/SparseMatrix.hpp"
 
 #include <complex>
-#include <map>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -21,7 +20,8 @@ public:
     // Register the additive boundary conditions (wave ports, ABCs, SIBCs, ...)
     // that contribute to the system matrix and RHS. PEC zero-Dirichlet is
     // *not* a boundary condition; it is collected automatically from
-    // surface faces that are not waveports. Order of registration matches
+    // exterior faces other than wave ports and explicitly tagged PEC
+    // sheets. Order of registration matches
     // the order BCs are applied (apply / declareSparsity / affineContributions).
     //
     // Default: no BCs registered. Application.cpp must register at least
@@ -84,7 +84,6 @@ private:
     void applyBoundaryConditions(SparseMatrix& matrix, std::vector<std::complex<double>>& rhs, double frequencyHz, const std::unordered_set<int>& constrainedDofs) const;
     std::unordered_set<int> collectPecConstrainedDofs() const;
     std::shared_ptr<const SparsePattern> sparsityPattern(const std::unordered_set<int>& constrainedDofs) const;
-    std::map<int, std::unordered_set<int>> collectSurfaceEdgesByFace() const;
     void ensureElementCache() const;
     const std::unordered_set<int>& cachedConstrainedDofs() const;
 

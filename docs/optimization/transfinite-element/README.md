@@ -1,6 +1,6 @@
 # 超限元（Transfinite Element, TFE）专题
 
-本目录维护**真正的** Transfinite Element 方法的设计与实现。模块名 `bpfem::tfe`、CLI `--port-method tfe`。
+本目录包含 TFE 理论、历史实现方案和工程入口。现行 CLI `--port-method tfe` 使用端口网格的数值 H(curl) 本征模，并把多个模式的波端口项加到全局系统。完整模态自由度替换与 Schur 推导见理论稿。
 
 > 注：本目录早期版本（理论文档与 README）描述的实际是"解析端口模"（APM）。该内容已迁出到 `../analytic-port/` 子目录，并对应模块 `bpfem::apm`、CLI `--port-method analytic`。
 
@@ -18,16 +18,16 @@
 .\build\Release\bp_fem_solver.exe --basis-order 1 --port-method tfe --tfe-modes-per-port 5
 ```
 
-每个端口面同时纳入 `--tfe-modes-per-port` 个解析模（按截止波数排序，TE10 主模 index 0），每个模贡献一个秩-1 端口算子并入全局 H(curl) 矩阵。激励仅施加在主模上；其它模式作为吸收。
+每个端口面同时纳入 `--tfe-modes-per-port` 个数值本征模（按截止波数排序，最低保留模式 index 0），每个模贡献一个秩-1 端口算子并入全局 H(curl) 矩阵。激励仅施加在主模上；其它模式作为吸收。
 
 ## 与 APM 的关系
 
 | 维度 | APM (`--port-method analytic`) | TFE (`--port-method tfe`) |
 |---|---|---|
-| 模式数 | 仅 TE10 | 矩形 TE_mn / TM_mn 多模 |
+| 模式数 | 仅 TE10 | 数值多模 |
 | 端口算子 | 单秩-1 | $\sum_{(m,n)} \mathrm{rank-1}$ |
 | 与 ALPS 兼容 | ✓ | ✓（自动展开为虚拟端口） |
-| 物理来源 | 解析模 + FE L2 投影 | 同 + 多模 + Schur 消元后等价多端口 |
-| 实现复杂度 | 端口面 mass + Cholesky | 同 + 模式枚举 + 多模 RHS/LHS 分支 |
+| 物理来源 | 解析模 + FE L2 投影 | 端口网格本征解 + 多模波端口项 |
+| 实现复杂度 | 端口面 mass + Cholesky | 数值本征解 + 多模 RHS/LHS 分支 |
 
 详见 `tfe-plan.md` 与 `tfe-theory-cn.tex`。

@@ -4,6 +4,7 @@
 #include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
 #include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
 #include "bpfem/fastsweep/PortModeUtilities.hpp"
+#include "bpfem/post/ResultExtractor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -42,22 +43,41 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
 
     ctx.log.info("AWE expansion frequency: " + std::to_string(expansionHz / 1.0e9) + " GHz");
     ctx.log.info("AWE Padé denominator order: " + std::to_string(options_.order));
-    ctx.log.info("AWE moment variable: normalized lambda shift (lambda-lambda0)/lambda0");
+    ctx.log.info("AWE moment variable: normalized wavenumber shift (k-k0)/k0");
 
     linalg::SolverConfig solverCfg;
     solverCfg.maxIterations = ctx.linearMaxIterations;
     solverCfg.tolerance = ctx.linearTolerance;
     const auto offlineStarted = std::chrono::steady_clock::now();
     buildOffline(expansionHz, ctx.solver, solverCfg);
+    if (options_.fieldPade) {
+        const auto lambdaAt = [](double f) {
+            const double k = 2.0 * pi * f / c0;
+            return k * k;
+        };
+        const double lambda0 = lambdaAt(expansionHz);
+        for (double f : frequencies) {
+            const double lambda = lambdaAt(f);
+            for (double cutoff : affine_.portCutoffSquared) {
+                if ((lambda > cutoff) != (lambda0 > cutoff)) {
+                    throw std::runtime_error("AWE field Padé crosses a modal cutoff; split the frequency band");
+                }
+            }
+        }
+    }
     const double offlineBuildSec = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - offlineStarted).count();
 
-    ctx.log.info("AWE input Padé order: ["
-                 + std::to_string(inputProjectionPade_.numeratorOrder()) + "/"
-                 + std::to_string(inputProjectionPade_.denominatorOrder()) + "]");
-    ctx.log.info("AWE output Padé order: ["
-                 + std::to_string(outputProjectionPade_.numeratorOrder()) + "/"
-                 + std::to_string(outputProjectionPade_.denominatorOrder()) + "]");
+    if (options_.fieldPade) {
+        ctx.log.info("AWE paper mode: component-wise field Padé");
+    } else {
+        ctx.log.info("AWE input Padé order: ["
+                     + std::to_string(inputProjectionPade_.numeratorOrder()) + "/"
+                     + std::to_string(inputProjectionPade_.denominatorOrder()) + "]");
+        ctx.log.info("AWE output Padé order: ["
+                     + std::to_string(outputProjectionPade_.numeratorOrder()) + "/"
+                     + std::to_string(outputProjectionPade_.denominatorOrder()) + "]");
+    }
 
     SweepResult out;
     out.offlineBuildSec = offlineBuildSec;
@@ -78,10 +98,20 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
     if (!ctx.outputDirectory.empty()) {
         fastsweep::FastSweepDiagnostics diag;
         diag.algorithm = name();
+        diag.model = options_.fieldPade ? "wavenumber_field_pade" : "wavenumber_port_pade";
         diag.expansionFrequenciesHz = {expansionHz};
         diag.requestedOrder = options_.order;
-        diag.padeInputPivotRatio = inputProjectionPade_.pivotRatio();
-        diag.padeOutputPivotRatio = outputProjectionPade_.pivotRatio();
+        if (options_.fieldPade) {
+            for (const auto& pade : fieldPade_) {
+                diag.padeCoefficientMatchingError = std::max(
+                    diag.padeCoefficientMatchingError, pade.coefficientMatchingError());
+            }
+        } else {
+            diag.padeInputPivotRatio = inputProjectionPade_.pivotRatio();
+            diag.padeOutputPivotRatio = outputProjectionPade_.pivotRatio();
+            diag.padeCoefficientMatchingError = std::max(inputProjectionPade_.coefficientMatchingError(),
+                                                          outputProjectionPade_.coefficientMatchingError());
+        }
         diag.maxPassivityError = fastsweep::maxPassivityError(out.points);
         const auto path = ctx.outputDirectory / "diagnostics.json";
         if (fastsweep::writeDiagnosticsJson(path, diag)) {
@@ -90,7 +120,11 @@ SweepResult AweSweep::run(const std::vector<double>& frequencies, const SweepCon
             ctx.log.warn("Failed to write " + path.string());
         }
     }
-    (void)ctx.onFieldSolved;
+    if (options_.fieldPade && !frequencies.empty()) {
+        const double t = frequencies.back() / expansionFrequencyHz_ - 1.0;
+        out.lastEdgeDofs.reserve(fieldPade_.size());
+        for (const auto& pade : fieldPade_) out.lastEdgeDofs.push_back(pade.evaluate(t));
+    }
     return out;
 }
 
@@ -102,9 +136,8 @@ int AweSweep::buildOffline(double expansionFrequencyHz,
     }
 
     expansionFrequencyHz_ = expansionFrequencyHz;
-    const double kExpansion = 2.0 * pi * expansionFrequencyHz_ / c0;
-    lambda0_ = kExpansion * kExpansion;
-    lambdaScale_ = std::max(lambda0_, 1.0);
+    ready_ = false;
+    fieldPade_.clear();
 
     affine_ = assembler_.buildAffineSystem();
     if (!affine_.lossless) {
@@ -118,7 +151,25 @@ int AweSweep::buildOffline(double expansionFrequencyHz,
     const auto fieldMoments =
         fastsweep::PolynomialPortMomentBuilder::generateLosslessMoments(
             project_, assembler_, portModeSolver_, affine_, expansionFrequencyHz_,
-            momentCount, solver, solverConfig, portVectors);
+            momentCount, solver, solverConfig, portVectors,
+            fastsweep::PolynomialPortMomentBuilder::Variable::WavenumberShift);
+
+    if (options_.fieldPade) {
+        std::vector<Complex> coefficients(fieldMoments.size());
+        fieldPade_.reserve(affine_.K.size());
+        for (std::size_t i = 0; i < affine_.K.size(); ++i) {
+            for (std::size_t r = 0; r < coefficients.size(); ++r) coefficients[r] = fieldMoments[r][i];
+            try {
+                const bool zero = std::all_of(coefficients.begin(), coefficients.end(),
+                    [](Complex value) { return value == Complex{}; });
+                fieldPade_.push_back(fastsweep::PadeApproximant::build(coefficients, zero ? 0 : q - 1, zero ? 0 : q));
+            } catch (const std::runtime_error& error) {
+                throw std::runtime_error("AWE field Padé at DOF " + std::to_string(i) + ": " + error.what());
+            }
+        }
+        ready_ = true;
+        return momentCount;
+    }
 
     std::vector<Complex> inputProjectionMoments;
     std::vector<Complex> outputProjectionMoments;
@@ -151,9 +202,13 @@ SParameterPoint AweSweep::evaluate(double frequencyHz) const {
         return sp;
     }
 
-    const double k0 = 2.0 * pi * frequencyHz / c0;
-    const double lambda = k0 * k0;
-    const Complex t((lambda - lambda0_) / lambdaScale_, 0.0);
+    const Complex t(frequencyHz / expansionFrequencyHz_ - 1.0, 0.0);
+    if (options_.fieldPade) {
+        std::vector<Complex> field;
+        field.reserve(fieldPade_.size());
+        for (const auto& pade : fieldPade_) field.push_back(pade.evaluate(t));
+        return ResultExtractor(project_, portModeSolver_).extract(frequencyHz, field);
+    }
 
     const PortMode& inputMode = portModeSolver_.solve(project_.ports[0].faceId);
     const PortMode& outputMode = portModeSolver_.solve(project_.ports[1].faceId);

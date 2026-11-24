@@ -1,6 +1,8 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
+#include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
+#include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
 
@@ -9,27 +11,44 @@
 
 namespace fem::fastsweep {
 
+// True and Taylor residuals evaluated on the same supplied full-order field.
+SweepResidualSample losslessResiduals(
+    const ProjectDefinition& project, const PortModeSolver& modes,
+    const FEMAssembler::AffineSystem& affine, double frequencyHz,
+    const std::vector<std::complex<double>>& field,
+    const PolynomialPortMomentBuilder::PortTaylorSeries* series);
+
+bool nearPortCutoff(const FEMAssembler::AffineSystem& affine, double frequencyHz);
+bool hasLosslessExcitation(
+    const ProjectDefinition& project, const PortModeSolver& modes,
+    const FEMAssembler::AffineSystem& affine, double frequencyHz);
+
 class GalerkinReducedModel {
 public:
     using Complex = std::complex<double>;
+    using PortTaylorSeries = PolynomialPortMomentBuilder::PortTaylorSeries;
+    enum class Projection { Transpose, Hermitian };
 
     // 构造 Galerkin ROM，并缓存投影后的 K/M 矩阵和端口向量。
     void build(const ProjectDefinition& project,
                const FEMAssembler::AffineSystem& affine,
                const PortModeSolver& portModeSolver,
                std::vector<std::vector<Complex>> basis,
-               const std::vector<std::vector<Complex>>& portVectors);
+               const std::vector<std::vector<Complex>>& portVectors,
+               Projection projection = Projection::Transpose);
 
     // 在指定频率评估 S 参数。
-    SParameterPoint evaluate(double frequencyHz) const;
+    SParameterPoint evaluate(double frequencyHz, const PortTaylorSeries* series = nullptr) const;
 
     // 在指定频率求解 reduced 坐标。
-    std::vector<Complex> solveReduced(double frequencyHz) const;
+    std::vector<Complex> solveReduced(double frequencyHz, const PortTaylorSeries* series = nullptr) const;
 
     // 将 reduced 解重构为全阶边自由度。
-    std::vector<Complex> reconstructField(double frequencyHz) const;
+    std::vector<Complex> reconstructField(double frequencyHz, const PortTaylorSeries* series = nullptr) const;
 
     // 返回 ROM 维度。
+    double relativeResidual(double frequencyHz, const PortTaylorSeries* series = nullptr) const;
+
     int dimension() const { return romDim_; }
 
     // 返回原始全阶自由度维度。
@@ -50,6 +69,7 @@ private:
     const PortModeSolver* portModeSolver_ = nullptr;
 
     bool ready_ = false;
+    Projection projection_ = Projection::Transpose;
     mutable bool lastSolveSucceeded_ = true;
     int romDim_ = 0;
     int fullDim_ = 0;

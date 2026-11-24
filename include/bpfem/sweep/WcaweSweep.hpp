@@ -1,7 +1,8 @@
 #pragma once
 
 #include "bpfem/core/Types.hpp"
-#include "bpfem/fastsweep/GalerkinReducedModel.hpp"
+#include "bpfem/fastsweep/PolynomialPortMomentBuilder.hpp"
+#include "bpfem/fastsweep/FastSweepDiagnostics.hpp"
 #include "bpfem/fastsweep/PolynomialWcaweRecurrence.hpp"
 #include "bpfem/fem/FEMAssembler.hpp"
 #include "bpfem/fem/PortModeSolver.hpp"
@@ -9,6 +10,7 @@
 #include "bpfem/linalg/SparseMatrix.hpp"
 #include "bpfem/sweep/ISweepStrategy.hpp"
 
+#include <array>
 #include <complex>
 #include <filesystem>
 #include <vector>
@@ -17,6 +19,8 @@ namespace fem::sweep {
 
 struct WcaweOptions {
     // 论文 WCAWE 单展开点递推的目标基阶数。
+    bool checkMoments = false;
+    bool residualDiagnostics = false;
     int order = 12;
 
     // 展开频率，单位 Hz；取 0 时使用扫频带中心。
@@ -43,7 +47,7 @@ public:
     // 返回命令行和诊断文件使用的算法名。
     const char* name() const override { return "wcawe"; }
 
-    // 使用 P1 多项式模型逐阶生成 WCAWE 基并构建 Galerkin ROM。
+    // 使用单展开点多项式逐阶生成 WCAWE 基并构建约化方程。
     int buildOffline(double expansionFrequencyHz,
                      linalg::ISparseSolver& solver,
                      const linalg::SolverConfig& solverConfig);
@@ -67,6 +71,12 @@ public:
     bool writeBasisConditionCsv(const std::filesystem::path& path) const;
 
 private:
+    void projectPolynomial(
+        const FEMAssembler::AffineSystem& affine,
+        const fastsweep::PolynomialPortMomentBuilder::PortTaylorSeries& series,
+        const SparseMatrix& matrixAtExpansion,
+        const std::vector<Complex>& rhsAtExpansion);
+
     // 求解指定频率的 reduced 坐标。
     std::vector<Complex> solveReduced(double frequencyHz) const;
 
@@ -75,19 +85,22 @@ private:
     const PortModeSolver& portModeSolver_;
     WcaweOptions options_;
 
+    double fullMomentProjectionError_ = -1.0;
     bool ready_ = false;
     int romDim_ = 0;
-    int fullDim_ = 0;
-    int numProjectPorts_ = 0;
-    int numVirtualPorts_ = 0;
     int deflatedColumns_ = 0;
     double expansionFrequencyHz_ = 0.0;
+    double expansionLambda_ = 0.0;
     double orthogonalizationSec_ = 0.0;
     double romProjectionSec_ = 0.0;
 
-    FEMAssembler::AffineSystem affine_;
+    std::vector<double> portCutoffsSquared_;
+    std::optional<FEMAssembler::AffineSystem> diagnosticAffine_;
+    std::optional<fastsweep::PolynomialPortMomentBuilder::PortTaylorSeries> diagnosticTaylor_;
     fastsweep::WcaweBuildResult wcaweBuild_;
-    fastsweep::GalerkinReducedModel model_;
+    std::vector<std::vector<Complex>> reducedMatrices_;
+    std::vector<std::vector<Complex>> reducedRhs_;
+    std::array<std::vector<Complex>, 2> observationVectors_;
 };
 
 }  // namespace fem::sweep
